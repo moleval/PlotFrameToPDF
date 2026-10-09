@@ -1,0 +1,18 @@
+﻿# ременные и служебные файлы
+*.bak
+*.tmp
+*.swp
+*~
+
+# окальные артефакты AutoCAD
+*.dwl
+*.dwl2
+*.plt
+
+# апка экспорта
+PlotFramePDF/
+
+# Системные файлы
+Thumbs.db
+desktop.ini
+.DS_Store
