@@ -3,20 +3,25 @@
 ;;;
 ;;; Экспорт области, выделенной рамкой, в PDF (DWG To PDF.pc3).
 ;;;
-;;; v3.11: основной механизм печати — ActiveX (Layout + Plot.PlotToFile),
-;;;        без командной строки. Диалоги печати подавляются
-;;;        (QuietErrorMode + PAPERUPDATE=1), формат листа проверяется
-;;;        по фактическому списку media name устройства DWG To PDF.pc3.
-;;;        Расхождение наборов вопросов -ПЕЧАТЬ (Модель/Лист, версии
-;;;        AutoCAD) больше не влияет: команда -ПЕЧАТЬ не вызывается.
-;;;        Запасной механизм через -ПЕЧАТЬ сохранён: *pfp-engine* "command".
+;;; v3.12: возврат к печати через -ПЕЧАТЬ как основному механизму
+;;;        (окно печати через ActiveX в ряде конфигураций не применяется).
+;;;        Ключевое исправление: лента ответов -ПЕЧАТЬ собирается ПО
+;;;        ВКЛАДКЕ (Модель или Лист — разные наборы вопросов; именно
+;;;        отсюда были файлы "_N.pdf" и вопрос «Продолжить построение?»).
+;;;        Убраны «холостые Enter» из сброса состояния: они могли
+;;;        запускать повтор команды внутри выполняющейся команды
+;;;        (ошибка "неверный тип аргумента: stringp T" на второй печати).
+;;;        Имя CTB передаётся как есть (без проверки findfile — папка
+;;;        стилей печати может не входить в пути поиска).
+;;;        Любая ошибка печати перехватывается и печатается с контекстом.
+;;;        ActiveX-механизм сохранён как опция: *pfp-engine* "activex".
 ;;;
 ;;; Команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА
 ;;;          ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.11")
+(setq *pfp-ver* "3.12")
 
 (setq *pfp-open-mode* "rundll")
 (setq *pfp-open-delay* 300)
@@ -37,9 +42,10 @@
 (setq *pfp-ctb-color*        "acad.ctb")
 (setq *pfp-output-dir*       nil)
 
-;; "activex" — печать через ActiveX (рекомендуется, без вопросов);
-;; "command" — запасная печать через -ПЕЧАТЬ (капризна, см. ниже).
-(setq *pfp-engine* "activex")
+;; "command" — печать через -ПЕЧАТЬ (рекомендуется);
+;; "activex" — через Plot.PlotToFile (в ряде конфигураций не применяет
+;;             окно печати и стиль — использовать осознанно).
+(setq *pfp-engine* "command")
 ;; nil — после печати вернуть настройки листа, как было
 ;; (файл не «запоминает» DWG To PDF); T — оставить как есть.
 (setq *pfp-keep-page-setup* nil)
@@ -116,19 +122,17 @@
   (command "_.delay" ms)
   (setvar "CMDECHO" old-cmdecho))
 
-;; Принудительный сброс зависшего состояния командной строки.
-;; Три попытки: Esc через SendCommand, затем пустые Enter, пока CMDACTIVE > 0.
+;; Сброс зависшего состояния командной строки.
+;; Только Esc, только пока CMDACTIVE > 0. Пустые Enter НЕ отправляются:
+;; на пустой командной строке Enter повторяет последнюю команду,
+;; что запускало вложенный запуск самой себя.
 (defun pfp-clear-stuck ( / doc i)
   (setq doc (vl-catch-all-apply 'vla-get-ActiveDocument
                                 (list (vlax-get-acad-object))))
   (setq i 0)
   (while (and (< i 5) (> (getvar "CMDACTIVE") 0))
     (vl-catch-all-apply 'vla-SendCommand (list doc (chr 27)))
-    (vl-catch-all-apply 'vl-cmdf (list ""))
     (setq i (1+ i)))
-  ;; ещё два «холостых» Enter на случай не-CMDACTIVE запросов
-  (vl-catch-all-apply 'vl-cmdf (list ""))
-  (vl-catch-all-apply 'vl-cmdf (list ""))
   (princ))
 
 ;; Восстановление системных переменных после печати.
@@ -353,23 +357,24 @@
                                 (pfp-rotation media-name rot-str))
                   ;; 4. Область печати — рамка
                   (pfp-safe-put layout 'PlotType acWindow)
-                  (vl-catch-all-apply 'vla-SetWindowToPlot
+                  (setq res (vl-catch-all-apply 'vla-SetWindowToPlot
                     (list layout
                           (vlax-3d-point (car llw) (cadr llw) 0.0)
-                          (vlax-3d-point (car urw) (cadr urw) 0.0)))
+                          (vlax-3d-point (car urw) (cadr urw) 0.0))))
+                  (if (vl-catch-all-error-p res)
+                    (princ "\nПФП: окно печати не задано (SetWindowToPlot)."))
                   ;; 5. Вписать, центрировать
                   (pfp-safe-put layout 'UseStandardScale :vlax-true)
                   (pfp-safe-put layout 'StandardScale acScaleToFit)
                   (pfp-safe-put layout 'CenterPlot :vlax-true)
-                  ;; 6. Стиль печати
-                  (if (findfile ctb-name)
-                    (progn
-                      (pfp-safe-put layout 'PlotWithPlotStyles :vlax-true)
-                      (pfp-safe-put layout 'StyleSheet ctb-name))
+                  ;; 6. Стиль печати (без findfile: папка стилей может
+                  ;;    не входить в пути поиска — AutoCAD сам найдёт CTB)
+                  (if (pfp-safe-put layout 'StyleSheet ctb-name)
+                    (pfp-safe-put layout 'PlotWithPlotStyles :vlax-true)
                     (progn
                       (pfp-safe-put layout 'PlotWithPlotStyles :vlax-false)
                       (princ (strcat "\nПФП: стиль \"" ctb-name
-                                     "\" не найден — печать без стилей."))))
+                                     "\" не применён — печать без стилей."))))
                   (pfp-safe-put layout 'PlotHidden :vlax-false)
                   ;; 7. Печать в PDF
                   (setq res (vl-catch-all-apply 'vla-PlotToFile
@@ -391,44 +396,64 @@
   ok)
 
 ;; ---------------------------------------------------------------------------
-;; Запасной механизм: -ПЕЧАТЬ (только по необходимости)
+;; Основной механизм: -ПЕЧАТЬ
 ;; ---------------------------------------------------------------------------
-;; ВНИМАНИЕ: команда -ПЕЧАТЬ задаёт РАЗНЫЙ набор вопросов в зависимости
-;; от активной вкладки (Модель/Лист), версии AutoCAD и наличия формата
-;; в устройстве. Фиксированная лента ответов рассчитана на вкладку «Лист»;
-;; при несовпадении ответы «съезжают» (файлы вида "_N.pdf", оставшиеся
-;; без ответа вопросы «Продолжить построение?»). Поэтому по умолчанию
-;; используется ActiveX-механизм.
+;; ВНИМАНИЕ: команда -ПЕЧАТЬ задаёт РАЗНЫЙ набор вопросов для вкладок
+;; Модель и Лист:
+;;   Лист:  «масштабировать веса», «лист первым», «удалять скрытые»;
+;;   Модель: этих вопросов нет, вместо них «Задать тонирование»
+;;           (ответ — ключевое слово, а не Да/Нет).
+;; Лента ответов собирается по TILEMODE. Именно расхождение ленты
+;; давало PDF с именем "_N" и оставшийся вопрос «Продолжить построение?».
 
 (defun pfp-plot-by-command (fname-pdf media-name rot-str ctb-name x1 y1 x2 y2
-                            / old-cmdecho)
+                            / old-cmdecho tape i)
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
-  (command "_.-plot"
-           "_Y"                     ; подробная настройка
-           ""                       ; текущий лист
-           "DWG To PDF.pc3"         ; устройство
-           media-name               ; формат
-           "_M"                     ; мм
-           rot-str                  ; ориентация _L / _P
-           "_N"                     ; не переворачивать
-           "_W"                     ; область: Рамка
-           (list x1 y1)             ; нижний левый угол
-           (list x2 y2)             ; верхний правый угол
-           "_F"                     ; вписать
-           "_C"                     ; центрировать
-           "_Y"                     ; учитывать стили печати
-           ctb-name                 ; CTB-файл
-           "_Y"                     ; учитывать веса линий
-           "_N"                     ; не масштабировать веса
-           "_N"                     ; не чертить пространство листа первым
-           "_N"                     ; не удалять скрытые линии листа
-           fname-pdf                ; имя файла
-           "_N"                     ; не сохранять в параметры
-           "_Y")                    ; печатать
+  (setq tape
+    (append
+      (list "_.-plot"
+            "_Y"                     ; подробная настройка
+            ""                       ; текущий лист
+            "DWG To PDF.pc3"         ; устройство
+            media-name               ; формат
+            "_M"                     ; мм
+            rot-str                  ; ориентация _L / _P
+            "_N"                     ; не переворачивать
+            "_W"                     ; область: Рамка
+            (list x1 y1)             ; нижний левый угол
+            (list x2 y2)             ; верхний правый угол
+            "_F"                     ; вписать
+            "_C")                    ; центрировать
+      (if (= 1 (getvar "TILEMODE"))
+        ;; --- вкладка Модель ---
+        (list
+          "_Y"                     ; учитывать стили печати
+          ctb-name                 ; CTB-файл
+          "_Y"                     ; учитывать веса линий
+          "_N"                     ; не масштабировать веса
+          "_As"                    ; тонирование: по отображению
+          fname-pdf                ; имя файла
+          "_N"                     ; не сохранять в параметры
+          "_Y")                    ; печатать
+        ;; --- вкладка Лист ---
+        (list
+          "_Y"                     ; учитывать стили печати
+          ctb-name                 ; CTB-файл
+          "_Y"                     ; учитывать веса линий
+          "_N"                     ; не масштабировать веса
+          "_N"                     ; не чертить пространство листа первым
+          "_N"                     ; не удалять скрытые линии
+          fname-pdf                ; имя файла
+          "_N"                     ; не сохранять в параметры
+          "_Y"))))                  ; печатать
+  (apply 'command tape)
   (setvar "CMDECHO" old-cmdecho)
-  ;; дочитать оставшиеся вопросы значениями по умолчанию
-  (while (> (getvar "CMDACTIVE") 0) (command ""))
+  ;; дочитать возможный «хвост» значениями по умолчанию (с ограничением)
+  (setq i 0)
+  (while (and (> (getvar "CMDACTIVE") 0) (< i 15))
+    (command "")
+    (setq i (1+ i)))
   t)
 
 ;; ---------------------------------------------------------------------------
@@ -591,10 +616,12 @@
   (princ "\n    Raster graphics resolution : 150..200 dpi")
   (princ "\n    Vector graphics resolution : 1200 dpi")
   (princ)
-  (princ "\nv3.11: печать идёт через ActiveX (Plot.PlotToFile) без команды -ПЕЧАТЬ.")
-  (princ "\n  Вопросы -ПЕЧАТЬ не задаются, диалог «размер бумаги не найден»")
-  (princ "\n  (PAPERUPDATE) подавляется, формат проверяется по списку PC3")
-  (princ "\n  (см. ПФПМЕДИА). Запасной механизм: (setq *pfp-engine* \"command\").")
+  (princ "\nv3.12: печать через -ПЕЧАТЬ; лента ответов собирается по вкладке")
+  (princ "\n  (Модель/Лист). Диалог «размер бумаги не найден» (PAPERUPDATE)")
+  (princ "\n  подавляется на время печати. Если ввод кириллической команды")
+  (princ "\n  даёт «Неизвестная команда» — используйте псевдоним EXPTPDF")
+  (princ "\n  или нажмите Enter — повтор последней команды. Запасной механизм:")
+  (princ "\n  (setq *pfp-engine* \"activex\") — печать без командной строки.")
   (princ))
 
 (defun pfp-print-settings ()
@@ -701,15 +728,29 @@
                 fname     (itoa (pfp-next-number dir))
                 fname-pdf (strcat dir "\\" fname))
 
-          ;; Координаты рамки в WCS (для SetWindowToPlot)
-          (setq llw (trans (list x1 y1) 1 0)
-                urw (trans (list x2 y2) 1 0))
+          ;; Координаты окна для ActiveX: на Модели — WCS,
+          ;; на Листе — координаты пространства листа (как указали)
+          (if (= 1 (getvar "TILEMODE"))
+            (setq llw (trans (list x1 y1) 1 0)
+                  urw (trans (list x2 y2) 1 0))
+            (setq llw (list x1 y1)
+                  urw (list x2 y2)))
 
-          (setq ok (if (= *pfp-engine* "command")
-                     (pfp-plot-by-command fname-pdf media-name rot-str
-                                          ctb-name x1 y1 x2 y2)
-                     (pfp-plot-by-activex media-name short-name rot-str
-                                          ctb-name llw urw fname-pdf)))
+          ;; Печать с перехватом ошибок: сообщение не «повисает», а
+          ;; печатается целиком (какой бы механизм ни использовался)
+          (setq ok (vl-catch-all-apply
+                     '(lambda ()
+                        (if (= *pfp-engine* "command")
+                          (pfp-plot-by-command fname-pdf media-name rot-str
+                                               ctb-name x1 y1 x2 y2)
+                          (pfp-plot-by-activex media-name short-name rot-str
+                                               ctb-name llw urw fname-pdf)))))
+          (if (vl-catch-all-error-p ok)
+            (progn
+              (princ (strcat "\nПФП: ОШИБКА печати — "
+                             (vl-catch-all-error-message ok)))
+              (setq ok nil))
+            (setq ok (not (null ok))))
 
           (pfp-restore-sys has-trans old-trans old-bg old-paper)
 
