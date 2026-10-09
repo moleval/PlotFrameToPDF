@@ -11,15 +11,21 @@
 ;;; 2) Лента ответов -ПЕЧАТЬ собирается по вкладке (TILEMODE): наборы
 ;;;    вопросов Модели и Листа различаются — из-за этого были файлы
 ;;;    с именем «_N» и оставшийся вопрос «Продолжить построение?».
-;;; Рекомендуемая загрузка — через проверяющий загрузчик pfp_loader.lsp
-;;; (AutoLispDesign, п.6); допустима и прямая (load ...).
+;;; v3.17: перед -ПЕЧАТЬ активному листу через ActiveX предустанавли-
+;;;        ваются устройство и формат (сохранение/восстановление прежних
+;;;        значений). Из-за отсутствующего в устройстве формата -ПЕЧАТЬ
+;;;        вставляла лишний вопрос Да/Нет — лента съезжала и первая
+;;;        печать в файле уходила в PDF с именем по умолчанию.
+;;; Загрузка: прямая (load ...) или через единый загрузчик RELOAD
+;;; проекта AutoExtraction (раздел плагинов). Маркер редакции для
+;;; RELOAD: (ред. 1
 ;;;
 ;;; Команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА
 ;;;          ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.16")
+(setq *pfp-ver* "3.17")
 
 (setq *pfp-open-mode* "rundll")
 (setq *pfp-open-delay* 300)
@@ -39,6 +45,10 @@
 (setq *pfp-ctb-mono*         "monochrome.ctb")
 (setq *pfp-ctb-color*        "acad.ctb")
 (setq *pfp-output-dir*       nil)
+
+;; Сохранённые устройство/формат активного листа (на время печати);
+;; заполняется pfp-page-preset, очищается pfp-page-restore
+(setq *pfp-page-saved*       nil)
 
 ;; ---------------------------------------------------------------------------
 ;; Таблица форматов
@@ -76,6 +86,46 @@
 
 (defun pfp-get (obj prop)
   (vl-catch-all-apply 'vlax-get-property (list obj prop)))
+
+(defun pfp-safe-put (obj prop val)
+  (not (vl-catch-all-error-p
+         (vl-catch-all-apply 'vlax-put-property (list obj prop val)))))
+
+;; Предустановка устройства и формата активного листа через ActiveX.
+;; Цель: -ПЕЧАТЬ не вставляет лишний вопрос «формат не поддерживается»,
+;; из-за которого лента ответов съезжает (первая печать в файле уходила
+;; в PDF с именем по умолчанию). Прежние значения запоминаются в
+;; *pfp-page-saved* и восстанавливаются pfp-page-restore после печати.
+(defun pfp-page-preset (media-name / doc layout cfg med)
+  (setq *pfp-page-saved* nil)
+  (setq doc (pfp-get (vlax-get-acad-object) 'ActiveDocument))
+  (setq layout (pfp-get doc 'ActiveLayout))
+  (if (or (null layout) (vl-catch-all-error-p layout))
+    nil
+    (progn
+      (setq cfg (pfp-get layout 'ConfigName)
+            med (pfp-get layout 'CanonicalMediaName))
+      (setq *pfp-page-saved*
+            (list (if (vl-catch-all-error-p cfg) nil cfg)
+                  (if (vl-catch-all-error-p med) nil med)))
+      (pfp-safe-put layout 'ConfigName "DWG To PDF.pc3")
+      (pfp-safe-put layout 'CanonicalMediaName media-name))))
+
+;; Восстановление устройства и формата листа после печати.
+(defun pfp-page-restore ( / doc layout)
+  (if *pfp-page-saved*
+    (progn
+      (setq doc (pfp-get (vlax-get-acad-object) 'ActiveDocument))
+      (setq layout (pfp-get doc 'ActiveLayout))
+      (if (and (not (null layout)) (not (vl-catch-all-error-p layout)))
+        (progn
+          (if (car *pfp-page-saved*)
+            (pfp-safe-put layout 'ConfigName (car *pfp-page-saved*)))
+          (if (cadr *pfp-page-saved*)
+            (pfp-safe-put layout 'CanonicalMediaName
+                          (cadr *pfp-page-saved*)))))
+      (setq *pfp-page-saved* nil)))
+  (princ))
 
 (defun pfp-default-dir ()
   (strcat (getenv "TEMP") "\\" *pfp-subdir*))
@@ -459,6 +509,10 @@
                 fname     (itoa (pfp-next-number dir))
                 fname-pdf (strcat dir "\\" fname))
 
+          ;; Предустановка формата: убирает лишний вопрос -ПЕЧАТЬ
+          ;; на первой печати в файле (см. pfp-page-preset)
+          (pfp-page-preset media-name)
+
           ;; Печать через -PLOT.
           ;; Наборы вопросов Модели и Листа РАЗЛИЧАЮТСЯ: у Модели нет
           ;; вопросов «лист последним»/«удалять скрытые», но есть
@@ -508,6 +562,7 @@
           (setvar "BACKGROUNDPLOT" old-bg)
           (if (not (vl-catch-all-error-p old-paper))
             (setvar "PAPERUPDATE" old-paper))
+          (pfp-page-restore)
 
           (setq fname-pdf
                 (cond ((findfile (strcat fname-pdf ".pdf"))
@@ -579,7 +634,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Автозагрузка
 ;; ---------------------------------------------------------------------------
-(princ "\nЗагружено: PlotFrameToPDF.lsp v3.10 — команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА / ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП.")
+(princ (strcat "\nЗагружено: PlotFrameToPDF.lsp v" *pfp-ver* " — команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА / ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП."))
 (pfp-print-table)
 (pfp-print-vars)
 (pfp-print-hints)
