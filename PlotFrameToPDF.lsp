@@ -3,21 +3,21 @@
 ;;;
 ;;; Экспорт области, выделенной рамкой, в PDF (DWG To PDF.pc3).
 ;;;
-;;; v3.13: основной механизм снова ActiveX (Plot.PlotToFile), но
-;;;        окно печати теперь задаётся в ПРАВИЛЬНОЙ системе координат —
-;;;        DCS (trans ... 1 2). В v3.11 координаты передавались в WCS,
-;;;        окно выходило недопустимым, и AutoCAD молча печатал прежнюю
-;;;        сохранённую область («ранее сохранённая рамка»).
-;;;        Стиль печати (CTB) передаётся без проверки findfile.
-;;;        -ПЕЧАТЬ сохранена как запасной механизм (*pfp-engine* "command")
-;;;        с лентами ответов по вкладке Модель/Лист.
+;;; v3.14: локализовано единственное отказное звено ActiveX-печати —
+;;;        метод SetWindowToPlot. Теперь окно ставится ТРЕМЯ способами
+;;;        (vla-* с 3D-точками; vlax-invoke с плоскими списками;
+;;;        safearray 2x2 double) с печатью РЕАЛЬНЫХ текстов ошибок;
+;;;        PlotType ставится до и после окна; layout перечитывается
+;;;        после смены устройства. Если окно задать не удалось — печать
+;;;        НЕ выполняется (чтобы не выходила «сохранённая область»).
+;;;        Ошибка содержит этап [*pfp-stage*]. vla-EndUndoMark защищён.
 ;;;
 ;;; Команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА
 ;;;          ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.13")
+(setq *pfp-ver* "3.14")
 
 (setq *pfp-open-mode* "rundll")
 (setq *pfp-open-delay* 300)
@@ -43,6 +43,8 @@
 ;; "command" — запасная печать через -ПЕЧАТЬ (лента ответов зависит
 ;;             от вкладки и может дополниться вопросами AutoCAD).
 (setq *pfp-engine* "activex")
+;; Метка текущего этапа печати — попадает в сообщение об ошибке
+(setq *pfp-stage* "-")
 ;; nil — после печати вернуть настройки листа, как было
 ;; (файл не «запоминает» DWG To PDF); T — оставить как есть.
 (setq *pfp-keep-page-setup* nil)
@@ -304,13 +306,57 @@
     (pfp-safe-put layout (car pair) (cdr pair)))
   (princ))
 
+;; Способ 3: два safearray по два double (строгий тип параметров API)
+(defun pfp-window-set-sa (layout llw urw / a1 a2)
+  (setq a1 (vlax-make-safearray vlax-vbDouble '(0 . 1))
+        a2 (vlax-make-safearray vlax-vbDouble '(0 . 1)))
+  (vlax-safearray-fill a1 (list (car llw) (cadr llw)))
+  (vlax-safearray-fill a2 (list (car urw) (cadr urw)))
+  (vla-SetWindowToPlot layout a1 a2))
+
+;; Установка окна печати: три способа, с печатью реальных ошибок.
+;; Возвращает T, если окно задано; иначе nil (и тогда печать отменяется).
+(defun pfp-window-set (layout llw urw / e msg1 msg2)
+  ;; Способ 1: vla-* с 3D-точками (варианты)
+  (setq e (vl-catch-all-apply 'vla-SetWindowToPlot
+            (list layout
+                  (vlax-3d-point (car llw) (cadr llw) 0.0)
+                  (vlax-3d-point (car urw) (cadr urw) 0.0))))
+  (if (not (vl-catch-all-error-p e))
+    T
+    (progn
+      (setq msg1 (vl-catch-all-error-message e))
+      ;; Способ 2: vlax-invoke с плоскими списками точек
+      (setq e (vl-catch-all-apply 'vlax-invoke
+                (list layout 'SetWindowToPlot llw urw)))
+      (if (not (vl-catch-all-error-p e))
+        (progn
+          (princ (strcat "\nПФП: окно задано резервным способом (до этого: "
+                         msg1 "\").")) 
+          T)
+        (progn
+          (setq msg2 (vl-catch-all-error-message e))
+          ;; Способ 3: safearray 2x double
+          (setq e (vl-catch-all-apply 'pfp-window-set-sa
+                    (list layout llw urw)))
+          (if (not (vl-catch-all-error-p e))
+            (progn
+              (princ (strcat "\nПФП: окно задано третьим способом (до этого: "
+                             msg1 " / " msg2 "\")."))
+              T)
+            (progn
+              (princ (strcat "\nПФП: НЕ удалось задать окно печати."
+                             "\n    способ 1 (vla, 3D-точки): " msg1
+                             "\n    способ 2 (invoke, списки): " msg2
+                             "\n    способ 3 (safearray 2x2): "
+                             (vl-catch-all-error-message e))))
+            nil))))))
+
 ;; llw / urw — углы окна печати в DCS: (trans точка 1 2).
-;; Именно DCS требуется для SetWindowToPlot; передача WCS (ошибка v3.11)
-;; давала недопустимое окно и печать прежней сохранённой области.
 (defun pfp-plot-by-activex (media-name short-name rot-str ctb-name llw urw
                             fname-pdf
                             / acad doc layout plot ok res old-quiet saved
-                              lst valid)
+                              lst valid win-ok)
 
   (pfp-ensure-consts)
   (setq ok nil)
@@ -328,19 +374,26 @@
           (if (or (null plot) (vl-catch-all-error-p plot))
             (princ "\nПФП: недоступен объект Plot.")
             (progn
-              (vla-StartUndoMark doc)
+              (setq *pfp-stage* "запуск")
+              (vl-catch-all-apply 'vla-StartUndoMark (list doc))
               ;; Подавить диалоги печати («размер бумаги не найден» и др.)
               (setq old-quiet (pfp-get plot 'QuietErrorMode))
               (vl-catch-all-apply 'vla-put-QuietErrorMode
                                   (list plot :vlax-true))
               ;; Запомнить настройки листа, чтобы вернуть их после печати
               (if (not *pfp-keep-page-setup*)
-                (setq saved (pfp-layout-state layout)))
+                (progn
+                  (setq *pfp-stage* "запоминание настроек листа")
+                  (setq saved (pfp-layout-state layout))))
 
               ;; 1. Устройство
+              (setq *pfp-stage* "задание устройства")
               (if (pfp-safe-put layout 'ConfigName "DWG To PDF.pc3")
                 (progn
+                  ;; После смены устройства перечитать объект листа
+                  (setq layout (pfp-get doc 'ActiveLayout))
                   ;; 2. Формат: проверка по фактическому списку PC3
+                  (setq *pfp-stage* "проверка формата")
                   (setq lst (pfp-layout-media-list layout))
                   (if lst
                     (progn
@@ -353,47 +406,58 @@
                                        " использован \"" valid "\".")))
                       (setq media-name valid)))
                   ;; 3. Бумага и ориентация
+                  (setq *pfp-stage* "задание бумаги и ориентации")
                   (pfp-safe-put layout 'CanonicalMediaName media-name)
                   (pfp-safe-put layout 'PlotRotation
                                 (pfp-rotation media-name rot-str))
-                  ;; 4. Область печати — рамка
+                  ;; 4. Окно печати: PlotType -> окно -> PlotType -> окно
+                  (setq *pfp-stage* "задание окна печати")
                   (pfp-safe-put layout 'PlotType acWindow)
-                  (setq res (vl-catch-all-apply 'vla-SetWindowToPlot
-                    (list layout
-                          (vlax-3d-point (car llw) (cadr llw) 0.0)
-                          (vlax-3d-point (car urw) (cadr urw) 0.0))))
-                  (if (vl-catch-all-error-p res)
-                    (princ "\nПФП: окно печати не задано (SetWindowToPlot)."))
-                  ;; 5. Вписать, центрировать
-                  (pfp-safe-put layout 'UseStandardScale :vlax-true)
-                  (pfp-safe-put layout 'StandardScale acScaleToFit)
-                  (pfp-safe-put layout 'CenterPlot :vlax-true)
-                  ;; 6. Стиль печати (без findfile: папка стилей может
-                  ;;    не входить в пути поиска — AutoCAD сам найдёт CTB)
-                  (if (pfp-safe-put layout 'StyleSheet ctb-name)
-                    (pfp-safe-put layout 'PlotWithPlotStyles :vlax-true)
+                  (setq win-ok (pfp-window-set layout llw urw))
+                  (if win-ok
                     (progn
-                      (pfp-safe-put layout 'PlotWithPlotStyles :vlax-false)
-                      (princ (strcat "\nПФП: стиль \"" ctb-name
-                                     "\" не применён — печать без стилей."))))
-                  (pfp-safe-put layout 'PlotHidden :vlax-false)
-                  ;; 7. Печать в PDF
-                  (setq res (vl-catch-all-apply 'vla-PlotToFile
-                                (list plot fname-pdf)))
-                  (if (and (not (vl-catch-all-error-p res))
-                           (equal res :vlax-true))
-                    (setq ok T)
-                    (princ "\nПФП: PlotToFile вернул отказ.")))
+                      (pfp-safe-put layout 'PlotType acWindow)
+                      (setq win-ok (pfp-window-set layout llw urw))))
+                  ;; 5. Вписать, центрировать
+                  (if win-ok
+                    (progn
+                      (setq *pfp-stage* "задание масштаба")
+                      (pfp-safe-put layout 'UseStandardScale :vlax-true)
+                      (pfp-safe-put layout 'StandardScale acScaleToFit)
+                      (pfp-safe-put layout 'CenterPlot :vlax-true)
+                      ;; 6. Стиль печати
+                      (setq *pfp-stage* "задание стиля печати")
+                      (if (pfp-safe-put layout 'StyleSheet ctb-name)
+                        (pfp-safe-put layout 'PlotWithPlotStyles :vlax-true)
+                        (progn
+                          (pfp-safe-put layout 'PlotWithPlotStyles :vlax-false)
+                          (princ (strcat "\nПФП: стиль \"" ctb-name
+                                         "\" не применён — печать без стилей."))))
+                      (pfp-safe-put layout 'PlotHidden :vlax-false)
+                      ;; 7. Печать в PDF
+                      (setq *pfp-stage* "вывод в PDF (PlotToFile)")
+                      (setq res (vl-catch-all-apply 'vla-PlotToFile
+                                    (list plot fname-pdf)))
+                      (if (and (not (vl-catch-all-error-p res))
+                               (equal res :vlax-true))
+                        (setq ok T)
+                        (princ "\nПФП: PlotToFile вернул отказ.")))
+                    (princ (strcat
+                             "\nПФП: печать ОТМЕНЕНА — окно не задано,"
+                             " чтобы не печатать сохранённую область."))))
                 (princ "\nПФП: устройство DWG To PDF.pc3 не найдено."))
 
               ;; Вернуть настройки листа как было
-              (if saved (pfp-restore-layout layout saved))
+              (setq *pfp-stage* "восстановление настроек листа")
+              (vl-catch-all-apply 'pfp-restore-layout (list layout saved))
+              (setq *pfp-stage* "восстановление QuietErrorMode")
               (if (vl-catch-all-error-p old-quiet)
                 (vl-catch-all-apply 'vla-put-QuietErrorMode
                                     (list plot :vlax-false))
                 (vl-catch-all-apply 'vla-put-QuietErrorMode
                                     (list plot old-quiet)))
-              (vla-EndUndoMark doc)))))))
+              (setq *pfp-stage* "конец")
+              (vl-catch-all-apply 'vla-EndUndoMark (list doc))))))))
   ok)
 
 ;; ---------------------------------------------------------------------------
@@ -617,11 +681,10 @@
   (princ "\n    Raster graphics resolution : 150..200 dpi")
   (princ "\n    Vector graphics resolution : 1200 dpi")
   (princ)
-  (princ "\nv3.13: печать через ActiveX (Plot.PlotToFile) — окно задаётся")
-  (princ "\n  в DCS, вопросы и подтверждения командной строки не появляются.")
-  (princ "\n  Запасной механизм — команда -ПЕЧАТЬ: (setq *pfp-engine*")
-  (princ "\n  \"command\"); её лента ответов может дополниться вопросами")
-  (princ "\n  AutoCAD (набор зависит от версии и состояния файла).")
+  (princ "\nv3.14: печать через ActiveX (Plot.PlotToFile), окно ставится")
+  (princ "\n  тремя способами; если окно задать не удалось — печать")
+  (princ "\n  отменяется (никаких «сохранённых областей»). Сообщение об")
+  (princ "\n  ошибке содержит этап; пришлите лог — по нему видно точное место.")
   (princ "\n  Если кириллическая команда даёт «Неизвестная команда» —")
   (princ "\n  вводите EXPTPDF или нажмите Enter (повтор команды).")
   (princ))
@@ -745,8 +808,8 @@
                                                fname-pdf)))))
           (if (vl-catch-all-error-p ok)
             (progn
-              (princ (strcat "\nПФП: ОШИБКА печати — "
-                             (vl-catch-all-error-message ok)))
+              (princ (strcat "\nПФП: ОШИБКА печати [этап: " *pfp-stage*
+                             "] — " (vl-catch-all-error-message ok)))
               (setq ok nil))
             (setq ok (not (null ok))))
 
