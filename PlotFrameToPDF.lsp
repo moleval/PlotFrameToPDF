@@ -2,25 +2,24 @@
 ;;; PlotFrameToPDF.lsp
 ;;;
 ;;; Экспорт области, выделенной рамкой, в PDF (DWG To PDF.pc3).
+;;; Печать через командную строку _.-PLOT с координатами-списками.
 ;;;
-;;; v3.14: локализовано единственное отказное звено ActiveX-печати —
-;;;        метод SetWindowToPlot. Теперь окно ставится ТРЕМЯ способами
-;;;        (vla-* с 3D-точками; vlax-invoke с плоскими списками;
-;;;        safearray 2x2 double) с печатью РЕАЛЬНЫХ текстов ошибок;
-;;;        PlotType ставится до и после окна; layout перечитывается
-;;;        после смены устройства. Если окно задать не удалось — печать
-;;;        НЕ выполняется (чтобы не выходила «сохранённая область»).
-;;;        Ошибка содержит этап [*pfp-stage*]. vla-EndUndoMark защищён.
-;;;        v3.15: устранены конструкции, капризные для ридера Visual LISP
-;;;        (литеральные dotted-пары и quoted-lambda), добавлены маркеры
-;;;        прогресса загрузки по секциям (ПФП: ... загружена).
+;;; v3.16 относительно v3.10 (база) — только два исправления:
+;;; 1) PAPERUPDATE на время печати = 1: подавляет диалог «размер бумаги
+;;;    не найден» при первом построении в заново открытом файле
+;;;    (сохранение до печати, восстановление на всех выходах).
+;;; 2) Лента ответов -ПЕЧАТЬ собирается по вкладке (TILEMODE): наборы
+;;;    вопросов Модели и Листа различаются — из-за этого были файлы
+;;;    с именем «_N» и оставшийся вопрос «Продолжить построение?».
+;;; Рекомендуемая загрузка — через проверяющий загрузчик pfp_loader.lsp
+;;; (AutoLispDesign, п.6); допустима и прямая (load ...).
 ;;;
 ;;; Команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА
 ;;;          ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.15")
+(setq *pfp-ver* "3.16")
 
 (setq *pfp-open-mode* "rundll")
 (setq *pfp-open-delay* 300)
@@ -40,17 +39,6 @@
 (setq *pfp-ctb-mono*         "monochrome.ctb")
 (setq *pfp-ctb-color*        "acad.ctb")
 (setq *pfp-output-dir*       nil)
-
-;; "activex" — печать через Plot.PlotToFile (рекомендуется: ни одного
-;;             вопроса в командной строке);
-;; "command" — запасная печать через -ПЕЧАТЬ (лента ответов зависит
-;;             от вкладки и может дополниться вопросами AutoCAD).
-(setq *pfp-engine* "activex")
-;; Метка текущего этапа печати — попадает в сообщение об ошибке
-(setq *pfp-stage* "-")
-;; nil — после печати вернуть настройки листа, как было
-;; (файл не «запоминает» DWG To PDF); T — оставить как есть.
-(setq *pfp-keep-page-setup* nil)
 
 ;; ---------------------------------------------------------------------------
 ;; Таблица форматов
@@ -75,11 +63,11 @@
      200)
     ("2A0" 1682 1189
      "ISO_full_bleed_2A0_(1189.00_x_1682.00_MM)"
-     "ISO_full_bleed_2A0_(1682.00_x_1189.00_MM)"
+     "ISO_full_bleed_2A0_(1189.00_x_1682.00_MM)"
      400)
     ("4A0" 2378 1682
      "ISO_full_bleed_4A0_(1682.00_x_2378.00_MM)"
-     "ISO_full_bleed_4A0_(2378.00_x_1682.00_MM)"
+     "ISO_full_bleed_4A0_(1682.00_x_2378.00_MM)"
      999999)))
 
 ;; ---------------------------------------------------------------------------
@@ -88,10 +76,6 @@
 
 (defun pfp-get (obj prop)
   (vl-catch-all-apply 'vlax-get-property (list obj prop)))
-
-(defun pfp-safe-put (obj prop val)
-  (not (vl-catch-all-error-p
-         (vl-catch-all-apply 'vlax-put-property (list obj prop val)))))
 
 (defun pfp-default-dir ()
   (strcat (getenv "TEMP") "\\" *pfp-subdir*))
@@ -124,34 +108,24 @@
   (command "_.delay" ms)
   (setvar "CMDECHO" old-cmdecho))
 
-;; Сброс зависшего состояния командной строки.
-;; Только Esc, только пока CMDACTIVE > 0. Пустые Enter НЕ отправляются:
-;; на пустой командной строке Enter повторяет последнюю команду,
-;; что запускало вложенный запуск самой себя.
+;; Принудительный сброс зависшего состояния командной строки.
+;; Три попытки: Esc через SendCommand, затем пустые Enter, пока CMDACTIVE > 0.
 (defun pfp-clear-stuck ( / doc i)
   (setq doc (vl-catch-all-apply 'vla-get-ActiveDocument
                                 (list (vlax-get-acad-object))))
   (setq i 0)
   (while (and (< i 5) (> (getvar "CMDACTIVE") 0))
     (vl-catch-all-apply 'vla-SendCommand (list doc (chr 27)))
+    (vl-catch-all-apply 'vl-cmdf (list ""))
     (setq i (1+ i)))
-  (princ))
-
-;; Восстановление системных переменных после печати.
-(defun pfp-restore-sys (has-trans old-trans old-bg old-paper)
-  (if has-trans
-    (vl-catch-all-apply 'setvar
-      (list "PLOTTRANSPARENCYOVERRIDE" old-trans)))
-  (setvar "BACKGROUNDPLOT" old-bg)
-  (vl-catch-all-apply 'setvar (list "PAPERUPDATE" old-paper))
+  ;; ещё два «холостых» Enter на случай не-CMDACTIVE запросов
+  (vl-catch-all-apply 'vl-cmdf (list ""))
+  (vl-catch-all-apply 'vl-cmdf (list ""))
   (princ))
 
 ;; ---------------------------------------------------------------------------
 ;; Выбор формата
 ;; ---------------------------------------------------------------------------
-
-(princ (strcat "\nПФП: секция 1/7 загружена")) (princ)
-
 
 (defun pfp-format-idx (fmt / i lst found)
   (setq i 0 lst *pfp-formats* found nil)
@@ -216,331 +190,8 @@
               (if want-land "_L" "_P"))))))
 
 ;; ---------------------------------------------------------------------------
-;; Media name: естественная ориентация, проверка по устройству
-;; ---------------------------------------------------------------------------
-
-(princ (strcat "\nПФП: секция 2/7 загружена")) (princ)
-
-
-;; Естественная ориентация из canonical-имени: разбирает "(W_x_H)".
-;; W >= H -> "L", иначе "P".
-(defun pfp-media-natural-orient (media-name / i pw ph)
-  (setq i (vl-string-search "(" media-name))
-  (if (null i)
-    "L"
-    (progn
-      (setq pw (atof (substr media-name (+ i 2)))
-            i  (vl-string-search "_x_" media-name))
-      (if (null i)
-        "L"
-        (progn
-          (setq ph (atof (substr media-name (+ i 4))))
-          (if (>= pw ph) "L" "P"))))))
-
-;; Rotation constant so that -PLOT semantics are preserved:
-;; rot-str "_L"/"_P" relative to the media's natural orientation.
-(defun pfp-rotation (media-name rot-str)
-  (if (equal (substr rot-str 2 1) (pfp-media-natural-orient media-name))
-    acPlotRotation0
-    acPlotRotation90))
-
-(defun pfp-ensure-consts ()
-  (if (not (boundp 'acWindow))         (setq acWindow 4))
-  (if (not (boundp 'acScaleToFit))     (setq acScaleToFit -1))
-  (if (not (boundp 'acPlotRotation0))  (setq acPlotRotation0 0))
-  (if (not (boundp 'acPlotRotation90)) (setq acPlotRotation90 1))
-  (princ))
-
-;; Список canonical media name активного устройства данного листа.
-(defun pfp-layout-media-list (layout / lst v)
-  (setq lst (vl-catch-all-apply 'vlax-invoke-method
-                                (list layout 'GetCanonicalMediaNames)))
-  (if (or (null lst) (vl-catch-all-error-p lst))
-    nil
-    (progn
-      (setq v (vl-catch-all-apply 'vlax-variant-value (list lst)))
-      (if (vl-catch-all-error-p v)
-        nil
-        (progn
-          (setq lst (vl-catch-all-apply 'vlax-safearray->list (list v)))
-          (if (vl-catch-all-error-p lst) nil lst))))))
-
-;; Замена формата на реально существующий в устройстве:
-;; 1) точное имя; 2) любой лист того же формата ("_A1_"), желательно
-;;    нужной ориентации; 3) любой full bleed A0 той же ориентации;
-;; 4) первый доступный.
-(defun pfp-pick-valid-media (media-name short-name rot-str lst
-                             / nm want found found2)
-  (setq want (substr rot-str 2 1))
-  (cond
-    ((member media-name lst) media-name)
-    ((progn (setq found nil found2 nil)
-            (foreach nm lst
-              (if (vl-string-search
-                    (strcat "_" (strcase short-name) "_")
-                    (strcase nm))
-                (if (and (not found)
-                         (equal (pfp-media-natural-orient nm) want))
-                  (setq found nm)
-                  (if (not found2) (setq found2 nm)))))
-            (or found found2)))
-    ((progn (setq found nil found2 nil)
-            (foreach nm lst
-              (if (vl-string-search "FULL_BLEED_A0_" (strcase nm))
-                (if (and (not found)
-                         (equal (pfp-media-natural-orient nm) want))
-                  (setq found nm)
-                  (if (not found2) (setq found2 nm)))))
-            (or found found2)))
-    (lst (car lst))
-    (t media-name)))
-
-;; ---------------------------------------------------------------------------
-;; Основной механизм: ActiveX (без командной строки, без вопросов).
-(princ (strcat "\nПФП: секция 3/7 загружена")) (princ)
-
-;; Окно печати — в DCS; при печати с вкладки Лист это координаты листа.
-;; ---------------------------------------------------------------------------
-
-(defun pfp-layout-state (layout / props val res)
-  (setq props '(ConfigName CanonicalMediaName StyleSheet PlotType PlotRotation
-                UseStandardScale StandardScale CenterPlot PlotWithPlotStyles
-                PlotHidden))
-  (foreach p props
-    (setq val (pfp-get layout p))
-    (if (not (vl-catch-all-error-p val))
-      (setq res (cons (cons p val) res))))
-  (reverse res))
-
-(defun pfp-restore-layout (layout state / pair)
-  (foreach pair state
-    (pfp-safe-put layout (car pair) (cdr pair)))
-  (princ))
-
-;; Способ 3: два safearray по два double (строгий тип параметров API)
-(defun pfp-window-set-sa (layout llw urw / a1 a2)
-  (setq a1 (vlax-make-safearray vlax-vbDouble (cons 0 1))
-        a2 (vlax-make-safearray vlax-vbDouble (cons 0 1)))
-  (vlax-safearray-fill a1 (list (car llw) (cadr llw)))
-  (vlax-safearray-fill a2 (list (car urw) (cadr urw)))
-  (vla-SetWindowToPlot layout a1 a2))
-
-;; Установка окна печати: три способа, с печатью реальных ошибок.
-;; Возвращает T, если окно задано; иначе nil (и тогда печать отменяется).
-(defun pfp-window-set (layout llw urw / e msg1 msg2)
-  ;; Способ 1: vla-* с 3D-точками (варианты)
-  (setq e (vl-catch-all-apply 'vla-SetWindowToPlot
-            (list layout
-                  (vlax-3d-point (car llw) (cadr llw) 0.0)
-                  (vlax-3d-point (car urw) (cadr urw) 0.0))))
-  (if (not (vl-catch-all-error-p e))
-    T
-    (progn
-      (setq msg1 (vl-catch-all-error-message e))
-      ;; Способ 2: vlax-invoke с плоскими списками точек
-      (setq e (vl-catch-all-apply 'vlax-invoke
-                (list layout 'SetWindowToPlot llw urw)))
-      (if (not (vl-catch-all-error-p e))
-        (progn
-          (princ (strcat "\nПФП: окно задано резервным способом (до этого: "
-                         msg1 "\").")) 
-          T)
-        (progn
-          (setq msg2 (vl-catch-all-error-message e))
-          ;; Способ 3: safearray 2x double
-          (setq e (vl-catch-all-apply 'pfp-window-set-sa
-                    (list layout llw urw)))
-          (if (not (vl-catch-all-error-p e))
-            (progn
-              (princ (strcat "\nПФП: окно задано третьим способом (до этого: "
-                             msg1 " / " msg2 "\")."))
-              T)
-            (progn
-              (princ (strcat "\nПФП: НЕ удалось задать окно печати."
-                             "\n    способ 1 (vla, 3D-точки): " msg1
-                             "\n    способ 2 (invoke, списки): " msg2
-                             "\n    способ 3 (safearray 2x2): "
-                             (vl-catch-all-error-message e))))
-            nil))))))
-
-;; llw / urw — углы окна печати в DCS: (trans точка 1 2).
-(defun pfp-plot-by-activex (media-name short-name rot-str ctb-name llw urw
-                            fname-pdf
-                            / acad doc layout plot ok res old-quiet saved
-                              lst valid win-ok)
-
-  (pfp-ensure-consts)
-  (setq ok nil)
-  (setq acad (vlax-get-acad-object))
-  (setq doc (pfp-get acad 'ActiveDocument))
-  (cond
-    ((or (null doc) (vl-catch-all-error-p doc))
-     (princ "\nПФП: недоступен ActiveDocument."))
-    (t
-      (setq layout (pfp-get doc 'ActiveLayout))
-      (if (or (null layout) (vl-catch-all-error-p layout))
-        (princ "\nПФП: недоступен активный лист.")
-        (progn
-          (setq plot (pfp-get doc 'Plot))
-          (if (or (null plot) (vl-catch-all-error-p plot))
-            (princ "\nПФП: недоступен объект Plot.")
-            (progn
-              (setq *pfp-stage* "запуск")
-              (vl-catch-all-apply 'vla-StartUndoMark (list doc))
-              ;; Подавить диалоги печати («размер бумаги не найден» и др.)
-              (setq old-quiet (pfp-get plot 'QuietErrorMode))
-              (vl-catch-all-apply 'vla-put-QuietErrorMode
-                                  (list plot :vlax-true))
-              ;; Запомнить настройки листа, чтобы вернуть их после печати
-              (if (not *pfp-keep-page-setup*)
-                (progn
-                  (setq *pfp-stage* "запоминание настроек листа")
-                  (setq saved (pfp-layout-state layout))))
-
-              ;; 1. Устройство
-              (setq *pfp-stage* "задание устройства")
-              (if (pfp-safe-put layout 'ConfigName "DWG To PDF.pc3")
-                (progn
-                  ;; После смены устройства перечитать объект листа
-                  (setq layout (pfp-get doc 'ActiveLayout))
-                  ;; 2. Формат: проверка по фактическому списку PC3
-                  (setq *pfp-stage* "проверка формата")
-                  (setq lst (pfp-layout-media-list layout))
-                  (if lst
-                    (progn
-                      (setq valid (pfp-pick-valid-media media-name
-                                                        short-name rot-str
-                                                        lst))
-                      (if (not (equal valid media-name))
-                        (princ (strcat "\nПФП: формат \"" media-name
-                                       "\" отсутствует в DWG To PDF.pc3 —"
-                                       " использован \"" valid "\".")))
-                      (setq media-name valid)))
-                  ;; 3. Бумага и ориентация
-                  (setq *pfp-stage* "задание бумаги и ориентации")
-                  (pfp-safe-put layout 'CanonicalMediaName media-name)
-                  (pfp-safe-put layout 'PlotRotation
-                                (pfp-rotation media-name rot-str))
-                  ;; 4. Окно печати: PlotType -> окно -> PlotType -> окно
-                  (setq *pfp-stage* "задание окна печати")
-                  (pfp-safe-put layout 'PlotType acWindow)
-                  (setq win-ok (pfp-window-set layout llw urw))
-                  (if win-ok
-                    (progn
-                      (pfp-safe-put layout 'PlotType acWindow)
-                      (setq win-ok (pfp-window-set layout llw urw))))
-                  ;; 5. Вписать, центрировать
-                  (if win-ok
-                    (progn
-                      (setq *pfp-stage* "задание масштаба")
-                      (pfp-safe-put layout 'UseStandardScale :vlax-true)
-                      (pfp-safe-put layout 'StandardScale acScaleToFit)
-                      (pfp-safe-put layout 'CenterPlot :vlax-true)
-                      ;; 6. Стиль печати
-                      (setq *pfp-stage* "задание стиля печати")
-                      (if (pfp-safe-put layout 'StyleSheet ctb-name)
-                        (pfp-safe-put layout 'PlotWithPlotStyles :vlax-true)
-                        (progn
-                          (pfp-safe-put layout 'PlotWithPlotStyles :vlax-false)
-                          (princ (strcat "\nПФП: стиль \"" ctb-name
-                                         "\" не применён — печать без стилей."))))
-                      (pfp-safe-put layout 'PlotHidden :vlax-false)
-                      ;; 7. Печать в PDF
-                      (setq *pfp-stage* "вывод в PDF (PlotToFile)")
-                      (setq res (vl-catch-all-apply 'vla-PlotToFile
-                                    (list plot fname-pdf)))
-                      (if (and (not (vl-catch-all-error-p res))
-                               (equal res :vlax-true))
-                        (setq ok T)
-                        (princ "\nПФП: PlotToFile вернул отказ.")))
-                    (princ (strcat
-                             "\nПФП: печать ОТМЕНЕНА — окно не задано,"
-                             " чтобы не печатать сохранённую область."))))
-                (princ "\nПФП: устройство DWG To PDF.pc3 не найдено."))
-
-              ;; Вернуть настройки листа как было
-              (setq *pfp-stage* "восстановление настроек листа")
-              (vl-catch-all-apply 'pfp-restore-layout (list layout saved))
-              (setq *pfp-stage* "восстановление QuietErrorMode")
-              (if (vl-catch-all-error-p old-quiet)
-                (vl-catch-all-apply 'vla-put-QuietErrorMode
-                                    (list plot :vlax-false))
-                (vl-catch-all-apply 'vla-put-QuietErrorMode
-                                    (list plot old-quiet)))
-              (setq *pfp-stage* "конец")
-              (vl-catch-all-apply 'vla-EndUndoMark (list doc))))))))
-  ok)
-
-;; ---------------------------------------------------------------------------
-;; Запасной механизм: -ПЕЧАТЬ (включается *pfp-engine* "command")
-;; ---------------------------------------------------------------------------
-
-(princ (strcat "\nПФП: секция 4/7 загружена")) (princ)
-
-;; ВНИМАНИЕ: команда -ПЕЧАТЬ задаёт РАЗНЫЙ набор вопросов для вкладок
-;; Модель и Лист:
-;;   Лист:  «масштабировать веса», «лист первым», «удалять скрытые»;
-;;   Модель: этих вопросов нет, вместо них «Задать тонирование»
-;;           (ответ — ключевое слово, а не Да/Нет).
-;; Лента ответов собирается по TILEMODE. Именно расхождение ленты
-;; давало PDF с именем "_N" и оставшийся вопрос «Продолжить построение?».
-
-(defun pfp-plot-by-command (fname-pdf media-name rot-str ctb-name x1 y1 x2 y2
-                            / old-cmdecho tape i)
-  (setq old-cmdecho (getvar "CMDECHO"))
-  (setvar "CMDECHO" 0)
-  (setq tape
-    (append
-      (list "_.-plot"
-            "_Y"                     ; подробная настройка
-            ""                       ; текущий лист
-            "DWG To PDF.pc3"         ; устройство
-            media-name               ; формат
-            "_M"                     ; мм
-            rot-str                  ; ориентация _L / _P
-            "_N"                     ; не переворачивать
-            "_W"                     ; область: Рамка
-            (list x1 y1)             ; нижний левый угол
-            (list x2 y2)             ; верхний правый угол
-            "_F"                     ; вписать
-            "_C")                    ; центрировать
-      (if (= 1 (getvar "TILEMODE"))
-        ;; --- вкладка Модель ---
-        (list
-          "_Y"                     ; учитывать стили печати
-          ctb-name                 ; CTB-файл
-          "_Y"                     ; учитывать веса линий
-          "_N"                     ; не масштабировать веса
-          "_As"                    ; тонирование: по отображению
-          fname-pdf                ; имя файла
-          "_N"                     ; не сохранять в параметры
-          "_Y")                    ; печатать
-        ;; --- вкладка Лист ---
-        (list
-          "_Y"                     ; учитывать стили печати
-          ctb-name                 ; CTB-файл
-          "_Y"                     ; учитывать веса линий
-          "_N"                     ; не масштабировать веса
-          "_N"                     ; не чертить пространство листа первым
-          "_N"                     ; не удалять скрытые линии
-          fname-pdf                ; имя файла
-          "_N"                     ; не сохранять в параметры
-          "_Y"))))                  ; печатать
-  (apply 'command tape)
-  (setvar "CMDECHO" old-cmdecho)
-  ;; дочитать возможный «хвост» значениями по умолчанию (с ограничением)
-  (setq i 0)
-  (while (and (> (getvar "CMDACTIVE") 0) (< i 15))
-    (command "")
-    (setq i (1+ i)))
-  t)
-
-;; ---------------------------------------------------------------------------
 ;; Открытие PDF
 ;; ---------------------------------------------------------------------------
-
-(princ (strcat "\nПФП: секция 5/7 загружена")) (princ)
-
 
 (defun pfp-open-rundll (path / args)
   (setq args (strcat "url.dll,FileProtocolHandler \"" path "\""))
@@ -638,17 +289,11 @@
 (defun pfp-row (left right)
   (princ (strcat "\n  " (pfp-pad-right left 36) "  " right)))
 
-(defun pfp-print-vars ( / dir-str max-str area-str orient-str engine-str keep-str)
+(defun pfp-print-vars ( / dir-str max-str area-str orient-str)
   (setq dir-str    (if *pfp-output-dir* *pfp-output-dir* "nil (= %TEMP%\\PlotFramePDF)")
         max-str    (if *pfp-max-format* *pfp-max-format* "nil (без ограничения)")
         area-str   (if *pfp-consider-area* "T (учитывать)" "nil (только объекты)")
-        orient-str (if *pfp-force-orient* *pfp-force-orient* "nil (авто)")
-        engine-str (if (= *pfp-engine* "command")
-                       "command (-ПЕЧАТЬ, запасной)"
-                       "activex (PlotToFile)")
-        keep-str   (if *pfp-keep-page-setup*
-                       "T (оставить)"
-                       "nil (вернуть как было)"))
+        orient-str (if *pfp-force-orient* *pfp-force-orient* "nil (авто)"))
   (princ "\nПеременные модуля:")
   (pfp-row "переменная" "назначение / текущее значение")
   (pfp-row "--------------------" "--------------------------------------------------------------")
@@ -666,8 +311,6 @@
   (pfp-row "*pfp-open-mode*"        (strcat "способ откр.  [" *pfp-open-mode* "]"))
   (pfp-row "*pfp-block-size*"       (strcat "блок номеров  [" (itoa *pfp-block-size*) "]"))
   (pfp-row "*pfp-subdir*"           (strcat "подпапка  [" *pfp-subdir* "]"))
-  (pfp-row "*pfp-engine*"           (strcat "механизм печати  [" engine-str "]"))
-  (pfp-row "*pfp-keep-page-setup*"  (strcat "настройки листа  [" keep-str "]"))
   (princ))
 
 (defun pfp-print-examples ()
@@ -688,8 +331,6 @@
   (pfp-row "форс портретной"         "(setq *pfp-force-orient* \"portrait\")")
   (pfp-row "снять форс"              "(setq *pfp-force-orient* nil)")
   (pfp-row "задержка 500 мс"         "(setq *pfp-open-delay* 500)")
-  (pfp-row "запасная печать -ПЕЧАТЬ" "(setq *pfp-engine* \"command\")")
-  (pfp-row "печать через ActiveX"    "(setq *pfp-engine* \"activex\")")
   (princ))
 
 (defun pfp-print-hints ()
@@ -698,22 +339,14 @@
   (princ "\n    Raster graphics resolution : 150..200 dpi")
   (princ "\n    Vector graphics resolution : 1200 dpi")
   (princ)
-  (princ "\nv3.14: печать через ActiveX (Plot.PlotToFile), окно ставится")
-  (princ "\n  тремя способами; если окно задать не удалось — печать")
-  (princ "\n  отменяется (никаких «сохранённых областей»). Сообщение об")
-  (princ "\n  ошибке содержит этап; пришлите лог — по нему видно точное место.")
-  (princ "\n  Если кириллическая команда даёт «Неизвестная команда» —")
-  (princ "\n  вводите EXPTPDF или нажмите Enter (повтор команды).")
+  (princ "\nПеред печатью автоматически сбрасывается зависшее состояние командной строки.")
+  (princ "\nСписок media name — команда ПФПМЕДИА.")
   (princ))
 
 (defun pfp-print-settings ()
   (princ "\nТекущие настройки:")
   (princ (strcat "\n  режим печати : " (pfp-mode-str)
                  " (" (if *pfp-color-mode* *pfp-ctb-color* *pfp-ctb-mono*) ")"))
-  (princ (strcat "\n  механизм     : "
-                 (if (= *pfp-engine* "command")
-                   "-ПЕЧАТЬ (запасной)"
-                   "ActiveX (без вопросов)")))
   (princ (strcat "\n  папка        : " (if *pfp-output-dir*
                                          *pfp-output-dir* (pfp-default-dir))))
   (princ (strcat "\n  учёт площади : " (if *pfp-consider-area* "да" "нет")))
@@ -735,7 +368,16 @@
   (setq layout (pfp-get doc  'ActiveLayout))
   (if (or (null layout) (vl-catch-all-error-p layout))
     nil
-    (pfp-layout-media-list layout)))
+    (progn
+      (setq lst (vl-catch-all-apply 'vlax-invoke-method
+                                    (list layout 'GetCanonicalMediaNames)))
+      (if (vl-catch-all-error-p lst) (setq lst nil))
+      (if lst (setq v (vl-catch-all-apply 'vlax-variant-value (list lst))))
+      (if (and v (not (vl-catch-all-error-p v))) (setq lst v))
+      (if (and lst (not (listp lst)))
+        (setq lst (vl-catch-all-apply 'vlax-safearray->list (list lst))))
+      (if (vl-catch-all-error-p lst) (setq lst nil))
+      lst)))
 
 (defun c:ПФПМЕДИА ( / lst nm)
   (setq lst (pfp-list-media))
@@ -748,34 +390,24 @@
       (princ)))
   (princ))
 
-;; Диспетчер механизмов печати (вызывается через vl-catch-all-apply)
-(defun pfp-run-engine (fname-pdf media-name short-name rot-str ctb-name
-                       x1 y1 x2 y2)
-  (if (= *pfp-engine* "command")
-    (pfp-plot-by-command fname-pdf media-name rot-str ctb-name x1 y1 x2 y2)
-    (pfp-plot-by-activex media-name short-name rot-str ctb-name
-                         (trans (list x1 y1) 1 2)
-                         (trans (list x2 y2) 1 2)
-                         fname-pdf)))
-
 ;; ---------------------------------------------------------------------------
-;; Основная процедура
+;; Основная процедура — печать через -PLOT
 ;; ---------------------------------------------------------------------------
-(princ (strcat "\nПФП: секция 6/7 загружена")) (princ)
-
 
 (defun plot-frame-to-pdf-run ( / pt1 pt2 x1 y1 x2 y2 w h w-mm h-mm
-                                   dir fname fname-pdf fname-check
+                                   dir fname fname-pdf
                                    fmt media-name short-name orient-str rot-str
-                                   n-obj ss-filter ctb-name ok
+                                   n-obj ss-filter ctb-name
                                    old-trans has-trans old-bg old-paper
-                                   old-cmdecho )
+                                   plot-tape old-cmdecho )
 
   (setq has-trans
         (not (vl-catch-all-error-p
                (vl-catch-all-apply 'getvar '("PLOTTRANSPARENCYOVERRIDE")))))
   (if has-trans (setq old-trans (getvar "PLOTTRANSPARENCYOVERRIDE")))
   (setq old-bg      (getvar "BACKGROUNDPLOT"))
+  ;; PAPERUPDATE: сохраняем, печатаем с 1 (без диалога «размер бумаги
+  ;; не найден»), восстанавливаем на всех выходах (см. ниже)
   (setq old-paper   (vl-catch-all-apply 'getvar (list "PAPERUPDATE")))
   (setq old-cmdecho (getvar "CMDECHO"))
 
@@ -783,7 +415,6 @@
   (pfp-clear-stuck)
 
   (setvar "BACKGROUNDPLOT" 0)
-  ;; Не спрашивать «размер бумаги не найден — использовать по умолчанию?»
   (if (not (vl-catch-all-error-p old-paper)) (setvar "PAPERUPDATE" 1))
   (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" 1))
 
@@ -791,12 +422,18 @@
   (setq pt1 (getpoint "\nПервый угол рамки: "))
   (cond
     ((null pt1) (princ "\nОтменено.")
-                (pfp-restore-sys has-trans old-trans old-bg old-paper))
+                (setvar "BACKGROUNDPLOT" old-bg)
+                (if (not (vl-catch-all-error-p old-paper))
+                  (setvar "PAPERUPDATE" old-paper))
+                (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" old-trans)))
     (t
       (setq pt2 (getcorner pt1 "\nВторой угол рамки: "))
       (cond
         ((null pt2) (princ "\nОтменено.")
-                    (pfp-restore-sys has-trans old-trans old-bg old-paper))
+                    (setvar "BACKGROUNDPLOT" old-bg)
+                    (if (not (vl-catch-all-error-p old-paper))
+                      (setvar "PAPERUPDATE" old-paper))
+                    (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" old-trans)))
         (t
           (setq x1 (min (car  pt1) (car  pt2))
                 y1 (min (cadr pt1) (cadr pt2))
@@ -822,30 +459,65 @@
                 fname     (itoa (pfp-next-number dir))
                 fname-pdf (strcat dir "\\" fname))
 
-          ;; Печать с перехватом ошибок: сообщение не «повисает», а
-          ;; печатается целиком (какой бы механизм ни использовался).
-          ;; Окно для ActiveX — в DCS (см. примечание к функции).
-          (setq ok (vl-catch-all-apply 'pfp-run-engine
-                     (list fname-pdf media-name short-name rot-str ctb-name
-                           x1 y1 x2 y2)))
-          (if (vl-catch-all-error-p ok)
-            (progn
-              (princ (strcat "\nПФП: ОШИБКА печати [этап: " *pfp-stage*
-                             "] — " (vl-catch-all-error-message ok)))
-              (setq ok nil))
-            (setq ok (not (null ok))))
+          ;; Печать через -PLOT.
+          ;; Наборы вопросов Модели и Листа РАЗЛИЧАЮТСЯ: у Модели нет
+          ;; вопросов «лист последним»/«удалять скрытые», но есть
+          ;; «Задать тонирование» (ответ — ключевое слово, не Да/Нет).
+          ;; Лента собирается по TILEMODE, иначе ответы «съезжают».
+          (setvar "CMDECHO" 0)
+          (setq plot-tape
+            (append
+              (list "_.-plot"
+                    "_Y"                   ; подробная настройка
+                    ""                     ; текущий лист
+                    "DWG To PDF.pc3"       ; устройство
+                    media-name             ; формат
+                    "_M"                   ; мм
+                    rot-str                ; ориентация _L / _P
+                    "_N"                   ; не переворачивать
+                    "_W"                   ; область: Рамка
+                    (list x1 y1)           ; нижний левый угол
+                    (list x2 y2)           ; верхний правый угол
+                    "_F"                   ; вписать
+                    "_C"                   ; центрировать
+                    "_Y"                   ; учитывать стили печати
+                    ctb-name               ; CTB-файл
+                    "_Y"                   ; учитывать веса линий
+                    "_N")                  ; не масштабировать веса
+              (if (= 1 (getvar "TILEMODE"))
+                ;; --- вкладка Модель ---
+                (list
+                  "_As"                    ; тонирование: по отображению
+                  fname-pdf                ; имя файла
+                  "_N"                     ; не сохранять в параметры
+                  "_Y")                    ; печатать
+                ;; --- вкладка Лист ---
+                (list
+                  "_N"                     ; не печатать лист последним
+                  "_N"                     ; не удалять скрытые линии
+                  fname-pdf                ; имя файла
+                  "_N"                     ; не сохранять в параметры
+                  "_Y"))))                 ; печатать
+          (apply 'command plot-tape)
+          (setvar "CMDECHO" old-cmdecho)
 
-          (pfp-restore-sys has-trans old-trans old-bg old-paper)
+          ;; Дождаться полного завершения -PLOT
+          (while (> (getvar "CMDACTIVE") 0) (command))
 
-          (setq fname-check
+          (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" old-trans))
+          (setvar "BACKGROUNDPLOT" old-bg)
+          (if (not (vl-catch-all-error-p old-paper))
+            (setvar "PAPERUPDATE" old-paper))
+
+          (setq fname-pdf
                 (cond ((findfile (strcat fname-pdf ".pdf"))
                        (strcat fname-pdf ".pdf"))
                       ((findfile fname-pdf) fname-pdf)
                       (t nil)))
 
-          (if fname-check
+          (if fname-pdf
             (progn
-              (princ (strcat "\nPDF создан: " fname-check
+              (princ (strcat "\nPDF создан: " fname-pdf
                              " ||| объектов: " (itoa n-obj)
                              " ||| площадь рамки: "
                              (rtos w-mm 2 0) "x" (rtos h-mm 2 0) " мм"
@@ -855,21 +527,13 @@
                              " ||| задержка: " (itoa *pfp-open-delay*) " мс"))
               (princ (strcat "\n  media name: " media-name))
               (pfp-sleep *pfp-open-delay*)
-              (pfp-open fname-check))
-            (progn
-              (princ "\nНе удалось создать PDF (файл не найден после печати).")
-              (if (and (= *pfp-engine* "command") ok)
-                (princ (strcat "\n  Печать шла через -ПЕЧАТЬ: вероятна рассинхронизация"
-                               "\n  ответов (набор вопросов зависит от вкладки Модель/Лист)."
-                               "\n  Используйте (setq *pfp-engine* \"activex\").")))))
+              (pfp-open fname-pdf))
+            (princ "\nНе удалось создать PDF (файл не найден после -PLOT)."))
           (princ))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Очистка
 ;; ---------------------------------------------------------------------------
-
-(princ (strcat "\nПФП: секция 7/7 загружена")) (princ)
-
 
 (defun plot-frame-to-pdf-clean ( / dir files cnt)
   (setq dir (pfp-output-dir))
@@ -915,7 +579,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Автозагрузка
 ;; ---------------------------------------------------------------------------
-(princ (strcat "\nЗагружено: PlotFrameToPDF.lsp v" *pfp-ver* " — команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА / ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП."))
+(princ "\nЗагружено: PlotFrameToPDF.lsp v3.10 — команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА / ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП.")
 (pfp-print-table)
 (pfp-print-vars)
 (pfp-print-hints)
