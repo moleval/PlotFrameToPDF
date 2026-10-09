@@ -11,13 +11,16 @@
 ;;;        после смены устройства. Если окно задать не удалось — печать
 ;;;        НЕ выполняется (чтобы не выходила «сохранённая область»).
 ;;;        Ошибка содержит этап [*pfp-stage*]. vla-EndUndoMark защищён.
+;;;        v3.15: устранены конструкции, капризные для ридера Visual LISP
+;;;        (литеральные dotted-пары и quoted-lambda), добавлены маркеры
+;;;        прогресса загрузки по секциям (ПФП: ... загружена).
 ;;;
 ;;; Команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА
 ;;;          ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.14")
+(setq *pfp-ver* "3.15")
 
 (setq *pfp-open-mode* "rundll")
 (setq *pfp-open-delay* 300)
@@ -147,6 +150,9 @@
 ;; Выбор формата
 ;; ---------------------------------------------------------------------------
 
+(princ (strcat "\nПФП: секция 1/7 загружена")) (princ)
+
+
 (defun pfp-format-idx (fmt / i lst found)
   (setq i 0 lst *pfp-formats* found nil)
   (while (and lst (not found))
@@ -212,6 +218,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Media name: естественная ориентация, проверка по устройству
 ;; ---------------------------------------------------------------------------
+
+(princ (strcat "\nПФП: секция 2/7 загружена")) (princ)
+
 
 ;; Естественная ориентация из canonical-имени: разбирает "(W_x_H)".
 ;; W >= H -> "L", иначе "P".
@@ -288,6 +297,8 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Основной механизм: ActiveX (без командной строки, без вопросов).
+(princ (strcat "\nПФП: секция 3/7 загружена")) (princ)
+
 ;; Окно печати — в DCS; при печати с вкладки Лист это координаты листа.
 ;; ---------------------------------------------------------------------------
 
@@ -308,8 +319,8 @@
 
 ;; Способ 3: два safearray по два double (строгий тип параметров API)
 (defun pfp-window-set-sa (layout llw urw / a1 a2)
-  (setq a1 (vlax-make-safearray vlax-vbDouble '(0 . 1))
-        a2 (vlax-make-safearray vlax-vbDouble '(0 . 1)))
+  (setq a1 (vlax-make-safearray vlax-vbDouble (cons 0 1))
+        a2 (vlax-make-safearray vlax-vbDouble (cons 0 1)))
   (vlax-safearray-fill a1 (list (car llw) (cadr llw)))
   (vlax-safearray-fill a2 (list (car urw) (cadr urw)))
   (vla-SetWindowToPlot layout a1 a2))
@@ -463,6 +474,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Запасной механизм: -ПЕЧАТЬ (включается *pfp-engine* "command")
 ;; ---------------------------------------------------------------------------
+
+(princ (strcat "\nПФП: секция 4/7 загружена")) (princ)
+
 ;; ВНИМАНИЕ: команда -ПЕЧАТЬ задаёт РАЗНЫЙ набор вопросов для вкладок
 ;; Модель и Лист:
 ;;   Лист:  «масштабировать веса», «лист первым», «удалять скрытые»;
@@ -524,6 +538,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Открытие PDF
 ;; ---------------------------------------------------------------------------
+
+(princ (strcat "\nПФП: секция 5/7 загружена")) (princ)
+
 
 (defun pfp-open-rundll (path / args)
   (setq args (strcat "url.dll,FileProtocolHandler \"" path "\""))
@@ -731,9 +748,21 @@
       (princ)))
   (princ))
 
+;; Диспетчер механизмов печати (вызывается через vl-catch-all-apply)
+(defun pfp-run-engine (fname-pdf media-name short-name rot-str ctb-name
+                       x1 y1 x2 y2)
+  (if (= *pfp-engine* "command")
+    (pfp-plot-by-command fname-pdf media-name rot-str ctb-name x1 y1 x2 y2)
+    (pfp-plot-by-activex media-name short-name rot-str ctb-name
+                         (trans (list x1 y1) 1 2)
+                         (trans (list x2 y2) 1 2)
+                         fname-pdf)))
+
 ;; ---------------------------------------------------------------------------
 ;; Основная процедура
 ;; ---------------------------------------------------------------------------
+(princ (strcat "\nПФП: секция 6/7 загружена")) (princ)
+
 
 (defun plot-frame-to-pdf-run ( / pt1 pt2 x1 y1 x2 y2 w h w-mm h-mm
                                    dir fname fname-pdf fname-check
@@ -794,18 +823,11 @@
                 fname-pdf (strcat dir "\\" fname))
 
           ;; Печать с перехватом ошибок: сообщение не «повисает», а
-          ;; печатается целиком (какой бы механизм ни использовался)
-          (setq ok (vl-catch-all-apply
-                     '(lambda ()
-                        (if (= *pfp-engine* "command")
-                          (pfp-plot-by-command fname-pdf media-name rot-str
-                                               ctb-name x1 y1 x2 y2)
-                          ;; окно — в DCS (см. примечание к функции)
-                          (pfp-plot-by-activex media-name short-name rot-str
-                                               ctb-name
-                                               (trans (list x1 y1) 1 2)
-                                               (trans (list x2 y2) 1 2)
-                                               fname-pdf)))))
+          ;; печатается целиком (какой бы механизм ни использовался).
+          ;; Окно для ActiveX — в DCS (см. примечание к функции).
+          (setq ok (vl-catch-all-apply 'pfp-run-engine
+                     (list fname-pdf media-name short-name rot-str ctb-name
+                           x1 y1 x2 y2)))
           (if (vl-catch-all-error-p ok)
             (progn
               (princ (strcat "\nПФП: ОШИБКА печати [этап: " *pfp-stage*
@@ -845,6 +867,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Очистка
 ;; ---------------------------------------------------------------------------
+
+(princ (strcat "\nПФП: секция 7/7 загружена")) (princ)
+
 
 (defun plot-frame-to-pdf-clean ( / dir files cnt)
   (setq dir (pfp-output-dir))
