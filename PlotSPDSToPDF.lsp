@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 35
+;;; Маркер редакции для RELOAD: (ред. 36
+;;; v0.36: по запросу пользователя: больше трёх листов — сборка в один
+;;;        PDF выполняется автоматически (вопрос остался для 2-3).
+;;;        Лист 15.1 обрезался: bbox прокси-объекта СПДС (297.00x409.16)
+;;;        меньше видимого кадра; окно печати расширено на *psp-margin*
+;;;        (2% большей стороны, настраивается) — «Вписать» компенсирует.
 ;;; v0.35: по запросу пользователя: дробные листы (15, 15.1, 15.2)
 ;;;        идут по порядку номеров. Ранее atoi("15.1")=15 — все имели
 ;;;        один ключ и сортировались по вертикали. Номер парсится как
@@ -204,7 +209,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.35")
+(setq *psp-ver* "0.36")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -265,6 +270,10 @@
 ;; T: в ленту -ПЕЧАТЬ добавляется ответ «_N» для вопроса
 ;; «Масштабировать веса линий?» (переключается командой ПСПЛЕНТА)
 (setq *psp-tape-mode* nil)
+;; Поле печати: окно расширяется на эту долю от большей стороны листа
+;; (bbox прокси-объекта СПДС иногда меньше видимого кадра — лист 15.1
+;; обрезался снизу). 0.02 = 2%; при необходимости увеличьте.
+(setq *psp-margin* 0.02)
 
 ;; ---------------------------------------------------------------------------
 ;; Утилиты
@@ -938,7 +947,7 @@
                           bb used rec media rot-str ctb dir stamp fname
                           nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult multv
                           old-bg old-paper old-trans has-trans res
-                          merge-list gs ans merged pdfs k chk)
+                          merge-list gs ans merged pdfs k chk auto-merge dx dy)
   (princ "\nЭкспорт форматов СПДС в PDF. Выберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -1049,11 +1058,14 @@
               (princ (strcat "\n  ПСП: предустановка: "
                              (if (and (= (type chk) 'STR) (/= chk ""))
                                chk "НЕ ПРИМЕНИЛАСЬ")))))
-          ;; Окно печати задаётся в UCS
-          (setq x1 (car (trans (list (nth 4 it) (nth 5 it)) 0 1))
-                y1 (cadr (trans (list (nth 4 it) (nth 5 it)) 0 1))
-                x2 (car (trans (list (nth 6 it) (nth 7 it)) 0 1))
-                y2 (cadr (trans (list (nth 6 it) (nth 7 it)) 0 1)))
+          ;; Окно печати задаётся в UCS; расширяем на *psp-margin*,
+          ;; т.к. bbox прокси-объекта СПДС иногда меньше видимого кадра
+          (setq dx (* (max w h) *psp-margin*)
+                dy dx)
+          (setq x1 (car (trans (list (- (nth 4 it) dx) (- (nth 5 it) dy)) 0 1))
+                y1 (cadr (trans (list (- (nth 4 it) dx) (- (nth 5 it) dy)) 0 1))
+                x2 (car (trans (list (+ (nth 6 it) dx) (+ (nth 7 it) dy)) 0 1))
+                y2 (cadr (trans (list (+ (nth 6 it) dx) (+ (nth 7 it) dy)) 0 1)))
           (setq *psp-stage* "печать листа")
           (setq res (vl-catch-all-apply 'psp-plot-tape
                       (list (strcat fname ".pdf") media rot-str ctb
@@ -1119,11 +1131,18 @@
             (princ "\nПСП: поиск Ghostscript ОШИБКА: ")
             (princ (vl-catch-all-error-message gs))
             (setq gs nil)))
+        (setq auto-merge (> (length ok-list) 3))
         (if (and (> (length ok-list) 1) gs)
           (progn
-            (initget "Да Нет _ Yes No")
-            (setq ans (getkword "\nСобрать все листы в один PDF? [Да/Нет] <Да>: "))
-            (if (null ans) (setq ans "Да"))
+            (if auto-merge
+              (progn
+                (setq ans "Да")
+                (princ (strcat "\nПСП: листов " (itoa (length ok-list))
+                               " (>3) — собираю в один PDF автоматически.")))
+              (progn
+                (initget "Да Нет _ Yes No")
+                (setq ans (getkword "\nСобрать все листы в один PDF? [Да/Нет] <Да>: "))
+                (if (null ans) (setq ans "Да"))))
             (if (member (strcase ans)
                         (list (strcase "Да") (strcase "Yes")))
               (progn
