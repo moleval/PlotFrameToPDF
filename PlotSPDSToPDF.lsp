@@ -49,7 +49,11 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 52
+;;; Маркер редакции для RELOAD: (ред. 53
+;;; v0.53: «неверный тип аргумента: stringp nil», папка не сохранялась:
+;;;        unload_dialog стоял ДО чтения get_tile (после выгрузки
+;;;        get_tile возвращает nil). Порядок исправлен: значения
+;;;        читаются до выгрузки; все get_tile обёрнуты в psp-s->str.
 ;;; v0.52: DCL-диалога: у тайла spacer нельзя переопределять width
 ;;;        (фиксированный размер) — «неверный атрибут. Символ: spacer»,
 ;;;        строка 9. Заменено на безатрибутный spacer.
@@ -295,7 +299,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.52")
+(setq *psp-ver* "0.53")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1417,31 +1421,31 @@
       (mode_tile "dir" 2)
       (action_tile "ok" "(done_dialog 1)")
       (setq id (start_dialog))
-      (unload_dialog d)
       (if (= id 1)
         (progn
-          (setq s (get_tile "dir"))
+          (setq s (psp-s->str (get_tile "dir")))
           (while (and (> (strlen s) 0) (= (substr s (strlen s) 1) "\\"))
             (setq s (substr s 1 (1- (strlen s)))))
           (setq *psp-pdf-dir* s)
           (setcfg "AppData/PlotSPDS/PDFDir" s)
-          (setq s (get_tile "pc3"))
+          (setq s (psp-s->str (get_tile "pc3")))
           (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
           (setq *psp-pc3* s)
           (setcfg "AppData/PlotSPDS/PC3" s)
-          (setq n (atoi (get_tile "thr")))
+          (setq n (atoi (psp-s->str (get_tile "thr"))))
           (if (< n 1) (setq n 1))
           (setq *psp-auto-merge-n* n)
           (setcfg "AppData/PlotSPDS/AutoMergeN" (itoa n))
-          (setq n (atoi (get_tile "delay")))
+          (setq n (atoi (psp-s->str (get_tile "delay"))))
           (if (< n 0) (setq n 0))
           (setq *psp-open-delay-s* n)
           (setcfg "AppData/PlotSPDS/OpenDelay" (itoa n))
-          (setq *psp-open-res* (= (get_tile "openres") "1"))
+          (setq *psp-open-res* (= (psp-s->str (get_tile "openres")) "1"))
           (setcfg "AppData/PlotSPDS/OpenRes" (if *psp-open-res* "1" "0"))
-          (setq *psp-del-singles* (= (get_tile "dels") "1"))
+          (setq *psp-del-singles* (= (psp-s->str (get_tile "dels")) "1"))
           (setcfg "AppData/PlotSPDS/DelSingles" (if *psp-del-singles* "1" "0"))
           (princ "\nПСП: настройки сохранены.")))))
+      (unload_dialog d)
   (princ))
 
 (defun c:ПСПНАСТРОЙКИ () (psp-settings-dialog))
