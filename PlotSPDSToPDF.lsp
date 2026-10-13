@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 18
+;;; Маркер редакции для RELOAD: (ред. 19
+;;; v0.19: СБОРКА В ОДИН МНОГОСТРАНИЧНЫЙ PDF. Если напечатано больше
+;;;        одного листа и найден Ghostscript (*psp-gs* -> gs рядом с
+;;;        чертежом -> реестр -> Program Files), предлагается «Собрать
+;;;        все листы в один PDF? [Да/Нет] <Да>»: L01...LNN склеиваются
+;;;        в SPDS_<дата>_<время>.pdf рядом с подпапкой. Без GS —
+;;;        подсказка, постраничные PDF остаются.
 ;;; v0.18: прогон 0.17: пара «Сохранить изменения параметров листа?»/
 ;;;        «Перейти к печати?» вклинилась в ленту (в прогоне 4/4 была
 ;;;        подавлена PAPERUPDATE=0) — лента сдвинулась, все листы ушли
@@ -107,7 +113,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.18")
+(setq *psp-ver* "0.19")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -117,6 +123,8 @@
 (setq *psp-ctb-mono* "monochrome.ctb")
 (setq *psp-ctb-color* "acad.ctb")
 (setq *psp-output-dir* nil)
+;; Путь к Ghostscript (gswin64c.exe); nil — искать автоматически
+(setq *psp-gs* nil)
 
 ;; Имя примитива СПДС и каналы чтения свойств (порядок = приоритет)
 (setq *psp-spds-entity* "SPDSFORMAT")
@@ -638,6 +646,64 @@
     ((>= idx (1- n)) (nth (1- n) *psp-formats*))
     (t (nth (1+ idx) *psp-formats*))))
 
+;; Поиск Ghostscript: переменная *psp-gs* -> портативный gs рядом
+;; с чертежом -> реестр -> Program Files. Возвращает путь к консольному
+;; gswin64c.exe/gswin32c.exe или nil.
+(defun psp-find-gs ( / try res brand vers vk v pd sub exe)
+  (defun try (p)
+    (if (= (type p) 'STR) (findfile p)))
+  ;; 1) задан явно в *psp-gs*
+  (setq res (try *psp-gs*))
+  ;; 2) портативный gs рядом с чертежом
+  (if (null res)
+    (foreach p (list (strcat (getvar "DWGPREFIX") "gs\\gswin64c.exe")
+                     (strcat (getvar "DWGPREFIX") "gs\\gswin32c.exe")
+                     (strcat (getvar "DWGPREFIX") "gswin64c.exe")
+                     (strcat (getvar "DWGPREFIX") "gswin32c.exe"))
+      (if (null res) (setq res (try p)))))
+  ;; 3) реестр установленных версий
+  (if (null res)
+    (foreach brand '("GPL Ghostscript" "AFPL Ghostscript" "GNU Ghostscript")
+      (if (null res)
+        (foreach vk (vl-registry-descendents
+                      (strcat "HKEY_LOCAL_MACHINE\\SOFTWARE\\" brand))
+          (if (null res)
+            (progn
+              (setq v (vl-registry-read
+                        (strcat "HKEY_LOCAL_MACHINE\\SOFTWARE\\"
+                                brand "\\" (vl-princ-to-string vk))
+                        "GS_DLL"))
+              (if (= (type v) 'STR)
+                (setq res (or (try (strcat (vl-filename-directory v)
+                                           "\\gswin64c.exe"))
+                              (try (strcat (vl-filename-directory v)
+                                           "\\gswin32c.exe")))))))))))
+  ;; 4) Program Files: gs\\gs<версия>\\bin
+  (if (null res)
+    (foreach pd '("C:\\Program Files\\gs" "C:\\Program Files (x86)\\gs")
+      (if (vl-file-directory-p pd)
+        (foreach sub (vl-directory-files pd nil -1)
+          (if (= (type sub) 'STR)
+            (foreach exe '("gswin64c.exe" "gswin32c.exe")
+              (if (null res)
+                (setq res (try (strcat pd "\\" sub "\\bin\\" exe))))))))))
+  res)
+
+;; Склейка PDF-файлов Ghostscript'ом. Асинхронно (startapp), поэтому
+;; вызывающий ждёт появления целевого файла.
+(defun psp-merge-pdfs (gs src-lst trg / cmd k)
+  (setq cmd (strcat "\"" gs "\""
+                    " -dBATCH -dNOPAUSE -dSAFER -dQUIET"
+                    " -sDEVICE=pdfwrite"
+                    " -sOutputFile=\"" trg "\""
+                    " \"" (psp-join "\" " src-lst) "\"\""))
+  (startapp cmd)
+  (setq k 0)
+  (while (and (not (findfile trg)) (< k 40))
+    (psp-sleep 500)
+    (setq k (1+ k)))
+  (findfile trg))
+
 ;; ---------------------------------------------------------------------------
 ;; СПДС: сортировка и имена
 (princ (strcat "\nПСП: секция 6/10 загружена")) (princ)
@@ -686,7 +752,8 @@
 (defun c:ЭКССПДСВПДФ ( / ss n i ent obj it items fmt sheet sheet-i
                           bb used rec media rot-str ctb dir stamp fname
                           nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult multv
-                          old-bg old-paper old-trans has-trans res)
+                          old-bg old-paper old-trans has-trans res
+                          merge-list gs ans merged pdfs k)
   (princ "\nЭкспорт форматов СПДС в PDF. Выберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -816,7 +883,9 @@
             (if (findfile (strcat fname ".pdf"))
               (setq ok-list
                     (cons (list (car nm-n) (nth 2 it) (nth 3 it) media)
-                          ok-list))
+                          ok-list)
+                    merge-list (cons (strcat (car nm-n) ".pdf")
+                                     merge-list))
               (progn
                 (princ (strcat "\n  ПСП: PDF не найден, ожидался: "
                                fname ".pdf"))
@@ -845,7 +914,27 @@
         (princ (strcat "\nГотово: " (itoa (length ok-list))
                        " из " (itoa (length items))
                        "; без габаритов/ошибок: " (itoa (length skip))))
-        (princ "\nСборка в один многостраничный PDF — следующий этап.")
+        ;; Сборка в один многостраничный PDF (если есть Ghostscript
+        ;; и напечатано больше одного листа)
+        (if (and (> (length ok-list) 1) (setq gs (psp-find-gs)))
+          (progn
+            (initget "Да Нет _ Yes No")
+            (setq ans (getkword "\nСобрать все листы в один PDF? [Да/Нет] <Да>: "))
+            (if (null ans) (setq ans "Да"))
+            (if (= ans "Да")
+              (progn
+                (setq pdfs (reverse merge-list)
+                      merged (strcat dir "\\"
+                                     (vl-filename-base dir) ".pdf"))
+                (princ (strcat "\nПСП: склеиваю " (itoa (length pdfs))
+                               " листов (Ghostscript)..."))
+                (if (psp-merge-pdfs gs pdfs merged)
+                  (princ (strcat "\nСобрано в один PDF: " merged))
+                  (princ (strcat "\nПСП: файл не появился за 20 с — "
+                                 "запустите склейку вручную: " gs))))
+              (princ "\nПСП: сборка в один PDF пропущена.")))
+          (if (and (> (length ok-list) 1) (null gs))
+            (princ "\nПСП: Ghostscript не найден — один PDF не собираю.\nПСП: установите GS или положите gswin64c.exe в <чертех>\\gs\\.")))
         ;; Открыть папку сборки
         (psp-sleep *psp-open-delay*)
         (psp-open dir)
