@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 14
+;;; Маркер редакции для RELOAD: (ред. 15
+;;; v0.15: первый прогон ЭКССПДСВПДФ прошёл, но свежий чертёж задавал
+;;;        два вопроса («Сохранить изменения параметров листа?»,
+;;;        «Перейти к печати?») — пара PAPERUPDATE; лента сдвигалась и
+;;;        файл уходил с посторонним именем. На время экспорта
+;;;        PAPERUPDATE=0 (подавить), после — восстановление. Если PDF не
+;;;        найден после печати, печатается ожидаемый путь.
 ;;; v0.14: ПРИЧИНА «stringp T» НАЙДЕНА И ИСПРАВЛЕНА: булевы поля СПДС
 ;;;        (группа 290) entget отдаёт как T/nil; разбор оставлял такое
 ;;;        значение как есть, и (atoi T) падал. Разбор 300/40/90/290 теперь
@@ -87,7 +93,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.14")
+(setq *psp-ver* "0.15")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -733,7 +739,10 @@
         (setq old-paper (vl-catch-all-apply 'getvar (list "PAPERUPDATE")))
         (psp-clear-stuck)
         (setvar "BACKGROUNDPLOT" 0)
-        (if (not (vl-catch-all-error-p old-paper)) (setvar "PAPERUPDATE" 1))
+        ;; 0 = не спрашивать "Сохранить изменения параметров листа?"/
+        ;; "Перейти к печати?" при несовпадении размеров (первая печать
+        ;; в свежем чертеже без лишних подтверждений)
+        (if (not (vl-catch-all-error-p old-paper)) (setvar "PAPERUPDATE" 0))
         (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" 1))
         ;; Цикл печати
         (setq used nil ok-list nil j 0)
@@ -784,7 +793,10 @@
               (setq ok-list
                     (cons (list (car nm-n) (nth 2 it) (nth 3 it) media)
                           ok-list))
-              (setq skip (cons (car nm-n) skip))))
+              (progn
+                (princ (strcat "\n  ПСП: PDF не найден, ожидался: "
+                               fname ".pdf"))
+                (setq skip (cons (car nm-n) skip)))))
           (setq j (1+ j)))
         ;; Восстановление системных переменных
         (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" old-trans))
