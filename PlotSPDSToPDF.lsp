@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 26
+;;; Маркер редакции для RELOAD: (ред. 27
+;;; v0.27: склейка показала gs=T — psp-find-gs вернул T вместо пути
+;;;        (старый тест пользователя (princ (psp-find-gs)) -> «TT»,
+;;;        тот же случай). Поиск инструментирован: каждый этап печатает
+;;;        результат; в реестре читаются GS_DLL и GS_LIB (10.x);
+;;;        наружу проходит только строка, не-строка -> nil.
 ;;; v0.26: печать 4/4 прошла, но склейка упала «stringp T» — источник
 ;;;        статически не найден. Склейка сделана пуленепробиваемой:
 ;;;        все части команды через psp-s->str (не-строка НЕ роняет
@@ -151,7 +156,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.26")
+(setq *psp-ver* "0.27")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -696,12 +701,17 @@
 ;; Поиск Ghostscript: переменная *psp-gs* -> портативный gs рядом
 ;; с чертежом -> реестр -> Program Files. Возвращает путь к консольному
 ;; gswin64c.exe/gswin32c.exe или nil.
+;; Поиск Ghostscript: переменная *psp-gs* -> gs рядом с чертежом ->
+;; реестр (GS_DLL/GS_LIB) -> Program Files. Каждый этап печатает
+;; результат (диагностика «gs=T»); наружу только строка или nil.
 (defun psp-find-gs ( / try res brand vers vk v pd sub exe)
   (defun try (p)
     (if (= (type p) 'STR) (findfile p)))
   ;; 1) задан явно в *psp-gs*
   (setq res (try *psp-gs*))
-  ;; 2) портативный gs рядом с чертежом
+  (princ "\n  GS[1] явно задан: нет")
+  (if res (princ (strcat "\n  GS[1] = " res)))
+  ;; 2) gs рядом с чертежом
   (if (null res)
     (foreach p (list (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin64c.exe")
                      (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin32c.exe")
@@ -710,43 +720,42 @@
                      (strcat (getvar "DWGPREFIX") "gswin64c.exe")
                      (strcat (getvar "DWGPREFIX") "gswin32c.exe"))
       (if (null res) (setq res (try p)))))
-  ;; 3) реестр установленных версий
+  (if res (princ (strcat "\n  GS[2] рядом с чертежом: " res)))
+  ;; 3) реестр установленных версий (GS_DLL, в 10.x и GS_LIB)
   (if (null res)
-    (foreach brand '("GPL Ghostscript" "AFPL Ghostscript" "GNU Ghostscript")
+    (foreach brand (list "GPL Ghostscript" "AFPL Ghostscript" "GNU Ghostscript")
       (if (null res)
         (foreach vk (vl-registry-descendents
                       (strcat "HKEY_LOCAL_MACHINE\\SOFTWARE\\" brand))
           (if (null res)
-            (progn
-              (setq v (vl-registry-read
-                        (strcat "HKEY_LOCAL_MACHINE\\SOFTWARE\\"
-                                brand "\\" (vl-princ-to-string vk))
-                        "GS_DLL"))
-              (if (= (type v) 'STR)
-                (setq res (or (try (strcat (vl-filename-directory v)
-                                           "\\gswin64c.exe"))
-                              (try (strcat (vl-filename-directory v)
-                                           "\\gswin32c.exe")))))))))))
+            (foreach vn (list "GS_DLL" "GS_LIB")
+              (if (null res)
+                (progn
+                  (setq v (vl-registry-read
+                            (strcat "HKEY_LOCAL_MACHINE\\SOFTWARE\\"
+                                    brand "\\" (vl-princ-to-string vk))
+                            vn))
+                  (princ (strcat "\n  GS[3] " brand "\\" (psp-s->str vk)
+                                 "\\" vn " -> type="
+                                 (if v (vl-princ-to-string (type v)) "nil")))
+                  (if (= (type v) 'STR)
+                    (setq res (or (try (strcat (vl-filename-directory v)
+                                               "\\gswin64c.exe"))
+                                  (try (strcat (vl-filename-directory v)
+                                               "\\gswin32c.exe")))))))))))))
+  (if res (princ (strcat "\n  GS[3] реестр: " res)))
   ;; 4) Program Files: gs\\gs<версия>\\bin
   (if (null res)
-    (foreach pd '("C:\\Program Files\\gs" "C:\\Program Files (x86)\\gs")
+    (foreach pd (list "C:\\Program Files\\gs" "C:\\Program Files (x86)\\gs")
       (if (vl-file-directory-p pd)
         (foreach sub (vl-directory-files pd nil -1)
           (if (= (type sub) 'STR)
-            (foreach exe '("gswin64c.exe" "gswin32c.exe")
+            (foreach exe (list "gswin64c.exe" "gswin32c.exe")
               (if (null res)
                 (setq res (try (strcat pd "\\" sub "\\bin\\" exe))))))))))
-  res)
-
-;; Склейка PDF-файлов Ghostscript'ом. Асинхронно (startapp), поэтому
-;; вызывающий ждёт появления целевого файла.
-;; Безопасная строка: STR как есть, nil -> "", прочее -> princ-to-string
-;; (T и прочие не-строки не должны ронять strcat — показываем себя)
-(defun psp-s->str (x)
-  (cond
-    ((= (type x) 'STR) x)
-    ((null x) "")
-    (t (vl-princ-to-string x))))
+  (if res (princ (strcat "\n  GS[4] Program Files: " res)))
+  ;; страховка: наружу только строка или nil
+  (if (= (type res) 'STR) res nil))
 
 (defun psp-merge-pdfs (gs src-lst trg / cmd k s)
   (setq cmd (strcat "\"" (psp-s->str gs) "\""
