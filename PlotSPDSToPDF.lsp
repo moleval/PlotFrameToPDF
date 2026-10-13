@@ -49,7 +49,15 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 27
+;;; Маркер редакции для RELOAD: (ред. 28
+;;; v0.28: НАЙДЕНА ОКОНЧАТЕЛЬНАЯ ПРИЧИНА ВСЕХ «stringp T»: findfile
+;;;        у пользователя возвращает T вместо пути существующего файла
+;;;        (подозрение на вмешательство СПДС GraphiCS). Улики: «TT» в
+;;;        тесте 0.19, gs=T в 0.26, падение сразу после «type=STR» на
+;;;        strcat с результатом поиска. try теперь возвращает
+;;;        собственный путь, а не результат findfile. Добавлена команда
+;;;        ПСПГС / PSPGS: задать путь к Ghostscript вручную и запомнить
+;;;        (setcfg, восстанавливается при загрузке).
 ;;; v0.27: склейка показала gs=T — psp-find-gs вернул T вместо пути
 ;;;        (старый тест пользователя (princ (psp-find-gs)) -> «TT»,
 ;;;        тот же случай). Поиск инструментирован: каждый этап печатает
@@ -156,7 +164,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.27")
+(setq *psp-ver* "0.28")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -166,8 +174,10 @@
 (setq *psp-ctb-mono* "monochrome.ctb")
 (setq *psp-ctb-color* "acad.ctb")
 (setq *psp-output-dir* nil)
-;; Путь к Ghostscript (gswin64c.exe); nil — искать автоматически
-(setq *psp-gs* nil)
+;; Путь к Ghostscript (gswin64c.exe); nil — искать автоматически.
+;; Команда ПСПГС задаёт путь вручную и запоминает его (setcfg).
+(setq *psp-gs* (getcfg "AppData/PlotSPDS/GS"))
+(if (= *psp-gs* "") (setq *psp-gs* nil))
 
 ;; Имя примитива СПДС и каналы чтения свойств (порядок = приоритет)
 (setq *psp-spds-entity* "SPDSFORMAT")
@@ -705,8 +715,12 @@
 ;; реестр (GS_DLL/GS_LIB) -> Program Files. Каждый этап печатает
 ;; результат (диагностика «gs=T»); наружу только строка или nil.
 (defun psp-find-gs ( / try res brand vers vk v pd sub exe)
+  ;; ВАЖНО: у пользователя findfile для СУЩЕСТВУЮЩЕГО файла возвращает
+  ;; T, а не путь (подозрение на вмешательство СПДС GraphiCS) — поэтому
+  ;; findfile используется только как признак существования, наружу
+  ;; отдаётся собственный путь p.
   (defun try (p)
-    (if (= (type p) 'STR) (findfile p)))
+    (if (and (= (type p) 'STR) (findfile p)) p nil))
   ;; 1) задан явно в *psp-gs*
   (setq res (try *psp-gs*))
   (princ "\n  GS[1] явно задан: нет")
@@ -1062,6 +1076,24 @@
     "\nПСП: лента без ответа «Масштабировать веса линий?» (как в транскрипте 0.24)."))
   (princ))
 (defun c:PSPTAPE () (c:ПСПЛЕНТА))
+
+;; Задать путь к Ghostscript вручную и запомнить его постоянно
+(defun c:ПСПГС ( / p)
+  (setq p (getstring T
+    "\nПолный путь к gswin64c.exe (Enter — очистить): "))
+  (if (= p "")
+    (progn
+      (setq *psp-gs* nil)
+      (setcfg "AppData/PlotSPDS/GS" "")
+      (princ "\nПСП: путь к Ghostscript очищен, поиск автоматический."))
+    (progn
+      (setq p (vl-string-trim " \"" p))
+      (setq *psp-gs* p)
+      (setcfg "AppData/PlotSPDS/GS" p)
+      (princ (strcat "\nПСП: Ghostscript: " p
+                     (if (findfile p) "" "  (файл сейчас не найден!)")))))
+  (princ))
+(defun c:PSPGS () (c:ПСПГС))
 (princ (strcat "\nПСП: секция 10/10 загружена")) (princ)
 ;; ---------------------------------------------------------------------------
 ;; Загрузка
