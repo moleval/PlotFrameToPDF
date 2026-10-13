@@ -49,7 +49,12 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 40
+;;; ћаркер редакции дл€ RELOAD: (ред. 41
+;;; v0.41: журнал 0.40 показал: просмотрщик «јѕ”— јЋ—я, но ловил
+;;;        Ђпроцесс не может получить доступ к файлуї Ч gs создаЄт
+;;;        выходной PDF сразу, а закрывает последним; открытие по факту
+;;;        по€влени€ файла было гонкой. ќткрытие отложено на ~5 с
+;;;        (ping -n 6) внутри фонового cmd: gs к тому моменту завершЄн.
 ;;; v0.40: диагностика на машине пользовател€: вручную из консоли
 ;;;        открывались ¬—≈ механизмы (cmd start, explorer, rundll32),
 ;;;        но старт из работающего LISP Ч нет (DDE-ассоциаци€ .pdf,
@@ -228,7 +233,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.40")
+(setq *psp-ver* "0.41")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -875,25 +880,21 @@
     ((null x) "")
     (t (vl-princ-to-string x))))
 
-;; ќткрыть PDF системными средствами. ќсновной путь Ч explorer.exe:
-;; он сам прокачивает сообщени€ и передаЄт файл ассоциированному
-;; просмотрщику (cmd /c start из работающего LISP на DDE-ассоциаци€х
-;; иногда молча не срабатывает). «апасные: rundll32 FileProtocolHandler,
-;; затем cmd /c start. ¬озвращает T/nil последней попытки, пишет лог.
+;; ќткрыть PDF. Ghostscript создаЄт файл выхода —–ј«”, а закрывает
+;; только в конце работы: если открыть склейку по факту по€влени€
+;; файла, просмотрщик ловит Ђпроцесс не может получить доступ к файлуї
+;; (0.40). ѕоэтому просмотрщик запускаетс€ с задержкой ~5 с (ping)
+;; в ќ“ƒ≈Ћ№Ќќћ фоновом cmd Ч AutoCAD не ждЄт. «апасной путь Ч explorer.
 (defun psp-open-pdf (path / ok)
-  (setq ok (startapp "explorer.exe" path))
-  (princ (strcat " (explorer=" (psp-s->str ok)))
+  (princ " (открытие через ~5 с)")
+  (setq ok (startapp "cmd.exe"
+                     (strcat "/c ping -n 6 127.0.0.1 > nul & start \"\" \""
+                             path "\"")))
+  (princ (strcat "[cmd=" (psp-s->str ok) "]"))
   (if (null ok)
     (progn
-      (setq ok (startapp "rundll32.exe"
-                         (strcat "url.dll,FileProtocolHandler " path)))
-      (princ (strcat ", rundll32=" (psp-s->str ok)))))
-  (if (null ok)
-    (progn
-      (setq ok (startapp "cmd.exe"
-                         (strcat "/c start \"\" \"" path "\"")))
-      (princ (strcat ", cmd=" (psp-s->str ok)))))
-  (princ ")")
+      (setq ok (startapp "explorer.exe" path))
+      (princ (strcat "[explorer=" (psp-s->str ok) "]"))))
   ok)
 
 (defun psp-merge-pdfs (gs src-lst trg / cmd k s)
