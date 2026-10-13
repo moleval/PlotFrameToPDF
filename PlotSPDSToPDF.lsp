@@ -49,7 +49,15 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 22
+;;; Маркер редакции для RELOAD: (ред. 23
+;;; v0.23: РАЗГАДКА «ЗАСТРЯВАНИЙ»: хвост «Сохранить изменения параметров
+;;;        листа?/Перейти к печати?» — вопросы ветки ЛИСТА; при запуске с
+;;;        вкладки листа лента шла по неверной ветке. На время экспорта
+;;;        принудительно TILEMODE=1 (рамки СПДС лежат в модели), вкладка
+;;;        восстанавливается после печати. Из ветки листа удалён фантомный
+;;;        ответ «не печатать лист последним». Эхо печати: отдельные
+;;;        команды ПСПЭХОВКЛ / ПСПЭХОВЫКЛ (PSPECHOON / PSPECHOOFF).
+;;;        Двойной учёт пропусков устранён.
 ;;; v0.22: прогоны без «Печатная область чертежа: ...» = -ПЕЧАТЬ
 ;;;        спотыкается ДО шага окна; вопрос скрыт CMDECHO=0. Новый
 ;;;        диагностический режим ПСПЭХО / PSPECHO: не глушит эхо —
@@ -123,7 +131,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.22")
+(setq *psp-ver* "0.23")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -320,7 +328,6 @@
           "_Y")                      ; печатать
         ;; --- вкладка Лист ---
         (list
-          "_N"                       ; не печатать лист последним
           "_N"                       ; не удалять скрытые линии
           fname                      ; имя файла
           "_N"                       ; не сохранять в параметры
@@ -768,7 +775,7 @@
                           bb used rec media rot-str ctb dir stamp fname
                           nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult multv
                           old-bg old-paper old-trans has-trans res
-                          merge-list gs ans merged pdfs k)
+                          merge-list gs ans merged pdfs k old-tile)
   (princ "\nЭкспорт форматов СПДС в PDF. Выберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -826,6 +833,7 @@
         (if has-trans (setq old-trans (getvar "PLOTTRANSPARENCYOVERRIDE")))
         (setq old-bg (getvar "BACKGROUNDPLOT"))
         (setq old-paper (vl-catch-all-apply 'getvar (list "PAPERUPDATE")))
+        (setq old-tile (getvar "TILEMODE"))
         (psp-clear-stuck)
         (setvar "BACKGROUNDPLOT" 0)
         ;; 0 = не спрашивать "Сохранить изменения параметров листа?"/
@@ -833,10 +841,14 @@
         ;; в свежем чертеже без лишних подтверждений)
         (if (not (vl-catch-all-error-p old-paper))
           (setvar "PAPERUPDATE" 0))
+        ;; Рамки СПДС лежат в модели: печатаем всегда с вкладки Модель,
+        ;; иначе лента -ПЕЧАТЬ уходит в ветку листа
+        (setvar "TILEMODE" 1)
         (princ (strcat "\nПСП: PAPERUPDATE="
                        (itoa (getvar "PAPERUPDATE"))
                        " BACKGROUNDPLOT="
-                       (itoa (getvar "BACKGROUNDPLOT"))))
+                       (itoa (getvar "BACKGROUNDPLOT"))
+                       (if *psp-plot-echo* " (эхо=вкл)" " (эхо=выкл)")))
         (if (and (not (vl-catch-all-error-p old-paper))
                  (/= (getvar "PAPERUPDATE") 0))
           (princ "\nПСП: ВНИМАНИЕ: PAPERUPDATE не принят = 0!"))
@@ -884,9 +896,8 @@
           (if (> (getvar "CMDACTIVE") 0)
             (progn
               (princ "\n  ПСП: -ПЕЧАТЬ застряла на вопросе, снимаю по ESC.")
-              (princ "\n  ПСП: для диагностики включите ПСПЭХО и повторите.")
-              (psp-clear-stuck)
-              (setq skip (cons (car nm-n) skip)))
+              (princ "\n  ПСП: для диагностики включите ПСПЭХОВКЛ и повторите.")
+              (psp-clear-stuck))
             (if (vl-catch-all-error-p res)
               (princ "  ошибка печати, см. ниже")
               (princ "  отправлено на печать.")))
@@ -912,6 +923,7 @@
         (setvar "BACKGROUNDPLOT" old-bg)
         (if (not (vl-catch-all-error-p old-paper))
           (setvar "PAPERUPDATE" old-paper))
+        (setvar "TILEMODE" old-tile)
         ;; Отчёт
         (setq ok-list (reverse ok-list))
         (princ (strcat "\nСборка: " dir))
@@ -972,14 +984,16 @@
 
 ;; Диагностика: показывать/скрывать все подсказки -ПЕЧАТЬ во время
 ;; серийной печати (эхо команд в консоль)
-(defun c:ПСПЭХО ( / v)
-  (setq v (not *psp-plot-echo*)
-        *psp-plot-echo* v)
+(defun psp-echo-set (v)
+  (setq *psp-plot-echo* v)
   (princ (if v
     "\nПСП: эхо печати ВКЛЮЧЕНО — подсказки -ПЕЧАТЬ будут видны."
     "\nПСП: эхо печати выключено."))
   (princ))
-(defun c:PSPECHO () (c:ПСПЭХО))
+(defun c:ПСПЭХОВКЛ () (psp-echo-set T))
+(defun c:ПСПЭХОВЫКЛ () (psp-echo-set nil))
+(defun c:PSPECHOON () (psp-echo-set T))
+(defun c:PSPECHOOFF () (psp-echo-set nil))
 (princ (strcat "\nПСП: секция 10/10 загружена")) (princ)
 ;; ---------------------------------------------------------------------------
 ;; Загрузка
