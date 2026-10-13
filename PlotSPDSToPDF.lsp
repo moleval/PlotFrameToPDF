@@ -15,7 +15,13 @@
 ;;;        конвертер psp-va->list (variant -> значение, safearray
 ;;;        проходит насквозь); разбор строки таблицы диагностики
 ;;;        обёрнут в перехват — один плохой объект не роняет отчёт.
-;;; Маркер редакции для RELOAD: (ред. 2
+;;; v0.3: по дампу подтверждено: ObjectName = mcsDbObjectFormat,
+;;;        кастомных COM-свойств у объекта НЕТ — формат/лист/листов
+;;;        лежат в данных примитива. Добавлен универсальный экстрактор:
+;;;        текстовые группы entget (1, 3), бинарные группы (310-312)
+;;;        с раскодировкой hex и извлечением читаемых строк, XRecord'ы
+;;;        расширения словаря, XData. Автопоиск кандидатов формата.
+;;; Маркер редакции для RELOAD: (ред. 3
 ;;;
 ;;; Этапы разработки:
 ;;;   0. Диагностика — ЭКССПДСДИАГ: типы объектов, свойства, дамп.
@@ -25,7 +31,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.2")
+(setq *psp-ver* "0.3")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -250,6 +256,167 @@
   (setq r (psp-spds-prop-ex obj names))
   (if r (car r) nil))
 
+;; Значение hex-символа (0-9, A-F, a-f) или nil.
+(defun psp-hexval (ch / c)
+  (setq c (ascii ch))
+  (cond
+    ((and (>= c 48) (<= c 57)) (- c 48))
+    ((and (>= c 65) (<= c 70)) (- c 55))
+    ((and (>= c 97) (<= c 102)) (- c 87))
+    (t nil)))
+
+;; Строка hex-пар -> байтовая строка. Некорректные хвосты игнорируются.
+(defun psp-hex->str (hex / i h1 h2 res)
+  (setq i 1 res "")
+  (if hex
+    (progn
+      (while (<= (+ i 1) (strlen hex))
+        (setq h1 (psp-hexval (substr hex i 1))
+              h2 (psp-hexval (substr hex (1+ i) 1)))
+        (if (and h1 h2)
+          (setq res (strcat res (chr (+ (* 16 h1) h2)))))
+        (setq i (+ i 2)))))
+  res)
+
+;; Читаемые фрагменты (печатаемые коды 32..255) длиной >= minlen.
+(defun psp-printable-runs (s minlen / i code run res)
+  (setq i 1 run "" res nil)
+  (if s
+    (progn
+      (while (<= i (strlen s))
+        (setq code (ascii (substr s i 1)))
+        (if (and (>= code 32) (/= code 127) (<= code 255))
+          (setq run (strcat run (substr s i 1)))
+          (progn
+            (if (>= (strlen run) minlen) (setq res (cons run res)))
+            (setq run "")))
+        (setq i (1+ i)))
+      (if (>= (strlen run) minlen) (setq res (cons run res)))))
+  (reverse res))
+
+;; Объединение строк через разделитель.
+(defun psp-join (sep lst / res)
+  (setq res "")
+  (foreach s lst
+    (setq res (if (= res "") s (strcat res sep s))))
+  res)
+
+;; Строки объекта СПДС: entget (группы 1, 3 и бинарные 310-312),
+;; XRecord'ы расширения словаря, XData. Каждый шаг защищён.
+(defun psp-spds-strings (obj ent / ed item runs s res dict it nm
+                             codes vals cl vl i v)
+  (setq res nil)
+  ;; 1) entget
+  (setq ed (vl-catch-all-apply 'entget (list ent '("*"))))
+  (if (and (not (vl-catch-all-error-p ed)) ed)
+    (foreach item ed
+      (cond
+        ((and (member (car item) '(1 3))
+              (= (type (cdr item)) 'STR)
+              (> (strlen (cdr item)) 1))
+         (setq res (cons (cdr item) res)))
+        ((and (member (car item) '(310 311 312))
+              (= (type (cdr item)) 'STR))
+         (setq runs (psp-printable-runs (psp-hex->str (cdr item)) 4))
+         (foreach s runs (setq res (cons s res)))))))
+  ;; 2) расширение словаря: XRecord'ы
+  (setq dict (vl-catch-all-apply 'vla-getextensiondictionary
+                                 (list obj)))
+  (if (and (not (vl-catch-all-error-p dict)) dict)
+    (vlax-for it dict
+      (setq nm (psp-get it 'ObjectName))
+      (if (and (not (vl-catch-all-error-p nm)) (= nm "AcDbXrecord"))
+        (progn
+          (setq codes nil vals nil)
+          (vl-catch-all-apply 'vla-getxrecorddata (list it 'codes 'vals))
+          (if (and codes (not (vl-catch-all-error-p codes)))
+            (progn
+              (setq codes (vl-catch-all-apply 'vlax-safearray->list
+                              (list codes)))
+              (if (vl-catch-all-error-p codes) (setq codes nil))))
+          (if (and vals (not (vl-catch-all-error-p vals)))
+            (progn
+              (setq vals (vl-catch-all-apply 'vlax-safearray->list
+                              (list vals)))
+              (if (vl-catch-all-error-p vals) (setq vals nil))))
+          (if (and codes vals)
+            (progn
+              (setq i 0)
+              (while (and (< i (length codes))
+                          (< i (length vals)))
+                (setq v (psp-va->list-unwrap (nth i vals)))
+                (if (= (type v) 'SAFEARRAY)
+                  (setq v (vl-catch-all-apply 'vlax-safearray->list
+                              (list v))))
+                (if (vl-catch-all-error-p v) (setq v nil))
+                (if (and v (= (type v) 'LIST))
+                  (setq v (psp-join " " (mapcar 'vl-princ-to-string v))))
+                (if v
+                  (setq res (cons (strcat "XR[" (itoa (nth i codes))
+                                          "]=" (vl-princ-to-string v))
+                                  res)))
+                (setq i (1+ i)))))))))
+  (reverse res))
+
+;; Замена кириллических гомоглифов на латиницу (остальные символы
+;; не трогаются — позиции сохраняются).
+(defun psp-spds-latinize (s / i ch res)
+  (setq i 1 res "")
+  (while (<= i (strlen s))
+    (setq ch (substr s i 1)
+          res (strcat res
+                (cond
+                  ((member ch '("А" "A")) "A")
+                  ((member ch '("В" "B")) "B")
+                  ((member ch '("С" "C")) "C")
+                  ((member ch '("Е" "E")) "E")
+                  ((member ch '("Н" "H")) "H")
+                  ((member ch '("К" "K")) "K")
+                  ((member ch '("М" "M")) "M")
+                  ((member ch '("О" "O")) "O")
+                  ((member ch '("Р" "P")) "P")
+                  ((member ch '("Т" "T")) "T")
+                  ((member ch '("У" "Y")) "Y")
+                  ((member ch '("Х" "X")) "X")
+                  (t ch)))
+          i (1+ i)))
+  res)
+
+;; Кандидаты формата в строках: A1..A5 (латиница/кириллица),
+;; 2A0/4A0; кратность вида A4X2/A4Х2 тоже отмечается.
+(defun psp-spds-candidates (strs / res s su i ch n1 n2 tok)
+  (foreach s strs
+    (setq su (psp-spds-latinize (strcase s)) i 1)
+    (while (<= i (strlen su))
+      (setq ch (substr su i 1))
+      (cond
+        ;; 2A0 / 4A0
+        ((and (member ch '("2" "4"))
+              (<= (+ i 2) (strlen su))
+              (member (substr su (1+ i) 1) '("A"))
+              (= (substr su (+ i 2) 1) "0"))
+         (setq tok (strcat ch "A0"))
+         (if (not (member tok res)) (setq res (cons tok res)))
+         (setq i (+ i 2)))
+        ;; A0..A5 (в т.ч. с кратностью A4X3)
+        ((member ch '("A"))
+         (setq n1 (if (<= (1+ i) (strlen su))
+                    (substr su (1+ i) 1) ""))
+         (if (and (>= (ascii n1) 48) (<= (ascii n1) 53))
+           (progn
+             (setq tok (strcat ch n1)
+                   n2 (if (<= (+ i 2) (strlen su))
+                        (substr su (+ i 2) 1) ""))
+             (if (and (member n2 '("X"))
+                      (<= (+ i 3) (strlen su))
+                      (>= (ascii (substr su (+ i 3) 1)) 49)
+                      (<= (ascii (substr su (+ i 3) 1)) 57))
+               (setq tok (strcat tok "X" (substr su (+ i 3) 1))))
+             (if (not (member tok res)) (setq res (cons tok res))))))
+        (t nil))
+      (setq i (1+ i))))
+  (reverse res))
+
 ;; Свойства строки диагностики: (формат-имя лист листов габариты).
 (defun psp-spds-row (obj)
   (list (psp-spds-prop-ex obj *psp-spds-props-format*)
@@ -372,7 +539,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defun c:ЭКССПДСДИАГ ( / ss n i ent obj hnd doc ms e nm counts key
-                          fmt sheet total bb row f)
+                          fmt sheet total bb row f strs cands)
   (princ "\nСПДС-диагностика. Выберите объекты форматов (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -430,16 +597,46 @@
            obj (vlax-ename->vla-object ent))
      (princ "\n--- Свойства первого объекта (vlax-dump-object): ---")
      (vl-catch-all-apply 'vlax-dump-object (list obj))
+     ;; Универсальный экстрактор данных примитива
+     (setq nm (psp-get obj 'ObjectName)
+           strs (vl-catch-all-apply 'psp-spds-strings
+                  (list obj ent))
+           cands (if (vl-catch-all-error-p strs)
+                   nil
+                   (psp-spds-candidates strs)))
+     (if (vl-catch-all-error-p strs)
+       (progn
+         (princ "\nЭкстрактор данных: ОШИБКА — ")
+         (princ (vl-catch-all-error-message strs))
+         (setq strs nil))
+       (setq strs (reverse strs)))
+     (princ (strcat "\nObjectName: "
+                    (if (and nm (not (vl-catch-all-error-p nm))) nm "-")))
+     (princ (strcat "\nИзвлечено строк данных: "
+                    (itoa (length strs))))
+     (princ (strcat "\nКандидаты формата: "
+                    (if cands (psp-join ", " cands) "не найдены")))
+     (princ "\n--- Извлечённые строки (первые 40): ---")
+     (setq i 0)
+     (foreach s strs
+       (if (< i 40) (princ (strcat "\n  > " s)))
+       (setq i (1+ i)))
+     ;; Полный журнал
      (setq f (open (strcat (psp-output-dir) "\\spds_diag.txt") "a"))
      (if f
        (progn
          (write-line "---- SPDSFORMAT ----" f)
+         (write-line (strcat "ObjectName: "
+                             (if (and nm (not (vl-catch-all-error-p nm)))
+                               nm "-")) f)
+         (write-line (strcat "candidates: " (psp-join ", " cands)) f)
          (write-line (vl-prin1-to-string (entget ent '("*"))) f)
+         (foreach s strs (write-line (strcat "STR: " s)) f)
          (close f)
-         (princ (strcat "\nДанные entget дописаны: "
+         (princ (strcat "\nПолные данные дописаны: "
                         (psp-output-dir) "\\spds_diag.txt")))
        (princ "\nФайл журнала недоступен для записи."))
-     (princ "\nЕсли формат/лист показаны «-», пришлите весь вывод команды.")
+     (princ "\nПришлите весь вывод команды и spds_diag.txt с этой страницы.")
      (princ)))
   (princ))
 
