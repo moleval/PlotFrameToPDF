@@ -49,7 +49,9 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 19
+;;; Маркер редакции для RELOAD: (ред. 20
+;;; v0.20: автоискатель Ghostscript смотрит и в gs\\bin\\ рядом с
+;;;        чертежом (стандартная раскладка установки/архива).
 ;;; v0.19: СБОРКА В ОДИН МНОГОСТРАНИЧНЫЙ PDF. Если напечатано больше
 ;;;        одного листа и найден Ghostscript (*psp-gs* -> gs рядом с
 ;;;        чертежом -> реестр -> Program Files), предлагается «Собрать
@@ -113,7 +115,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.19")
+(setq *psp-ver* "0.20")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -656,7 +658,9 @@
   (setq res (try *psp-gs*))
   ;; 2) портативный gs рядом с чертежом
   (if (null res)
-    (foreach p (list (strcat (getvar "DWGPREFIX") "gs\\gswin64c.exe")
+    (foreach p (list (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin64c.exe")
+                     (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin32c.exe")
+                     (strcat (getvar "DWGPREFIX") "gs\\gswin64c.exe")
                      (strcat (getvar "DWGPREFIX") "gs\\gswin32c.exe")
                      (strcat (getvar "DWGPREFIX") "gswin64c.exe")
                      (strcat (getvar "DWGPREFIX") "gswin32c.exe"))
