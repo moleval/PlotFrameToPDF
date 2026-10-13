@@ -16,3 +16,7 @@ PlotFramePDF/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Ghostscript (локальная установка)
+gs/
+gs_setup.exe
