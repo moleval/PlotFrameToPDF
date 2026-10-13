@@ -49,7 +49,15 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 49
+;;; ћаркер редакции дл€ RELOAD: (ред. 50
+;;; v0.50: ќ Ќќ Ќј—“–ќ≈  ѕ—ѕЌј—“–ќ… » / PSPSET (DCL генерируетс€ во
+;;;        временную папку; хранение Ч реестр setcfg, восстановление
+;;;        при загрузке psp-load-cfg): папка сохранени€ PDF (gs
+;;;        собирает в temp, альбом переноситс€ cmd move, открытие Ч
+;;;        уже из новой папки), порог автосборки N (раньше 3), таймер
+;;;        открыти€ (раньше 5), им€ PDF-принтера (раньше только
+;;;        глобальна€), Ђќткрывать результатї, Ђ”дал€ть одиночныеї.
+;;;        √ейт *psp-open-pdf* заменЄн на *psp-open-res*.
 ;;; v0.49: по пользователю: при отказе от склейки (2-3 листа)
 ;;;        одиночные листы ќ“ –џ¬јё“—я (через ~5 с, фоновый cmd), то же
 ;;;        дл€ единственного листа. — Ђтихимї принтером это безопасно:
@@ -278,7 +286,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.49")
+(setq *psp-ver* "0.50")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -339,9 +347,12 @@
 ;; T: в ленту -ѕ≈„ј“№ добавл€етс€ ответ Ђ_Nї дл€ вопроса
 ;; Ђћасштабировать веса линий?ї (переключаетс€ командой ѕ—ѕЋ≈Ќ“ј)
 (setq *psp-tape-mode* nil)
-;; T: после успешной сборки открыть PDF системным просмотрщиком
-;; (переключение Ч в команде настроек, задача Ђнастройкиї)
-(setq *psp-open-pdf* T)
+;; Ќастройки (окно Ч команда ѕ—ѕЌј—“–ќ… » / PSPSET; хранение setcfg)
+(setq *psp-pdf-dir* "")      ; папка сохранени€ PDF ("" = temp)
+(setq *psp-auto-merge-n* 3)  ; автосборка при листах ЅќЋ№Ў≈ этого числа
+(setq *psp-open-delay-s* 5)  ; задержка открыти€ результата, секунд
+(setq *psp-open-res* T)      ; открывать результат (склейку/одиночные)
+(setq *psp-del-singles* T)   ; удал€ть одиночные листы после склейки
 ;; »м€ PDF-принтера. ¬ DWG To PDF.pc3 может быть включено Ђѕоказывать
 ;; результаты в программе просмотраї Ч тогда AutoCAD —јћ открывает
 ;; каждый отпечатанный лист (вкладки просмотрщика, блокировка
@@ -349,6 +360,27 @@
 ;; галочки (как Ч команда ѕ—ѕѕќћќў№) и укажите еЄ им€ здесь или
 ;; (setq *psp-pc3* "»м€.pc3") ѕќ—Ћ≈ загрузки модул€.
 (setq *psp-pc3* "PlotSPDSToPDF.pc3")
+
+;; ¬осстановление настроек из реестра (записывает ѕ—ѕЌј—“–ќ… »)
+(defun psp-load-cfg ( / s n)
+  (setq s (getcfg "AppData/PlotSPDS/PDFDir"))
+  (if (= (type s) 'STR) (setq *psp-pdf-dir* s))
+  (setq s nil n (getcfg "AppData/PlotSPDS/AutoMergeN"))
+  (if (= (type n) 'STR) (setq s (atoi n)))
+  (if (and (numberp s) (> s 0)) (setq *psp-auto-merge-n* s))
+  (setq s nil n (getcfg "AppData/PlotSPDS/OpenDelay"))
+  (if (= (type n) 'STR) (setq s (atoi n)))
+  (if (and (numberp s) (>= s 0)) (setq *psp-open-delay-s* s))
+  (setq s (getcfg "AppData/PlotSPDS/OpenRes"))
+  (cond ((= s "1") (setq *psp-open-res* T))
+        ((= s "0") (setq *psp-open-res* nil)))
+  (setq s (getcfg "AppData/PlotSPDS/DelSingles"))
+  (cond ((= s "1") (setq *psp-del-singles* T))
+        ((= s "0") (setq *psp-del-singles* nil)))
+  (setq s (getcfg "AppData/PlotSPDS/PC3"))
+  (if (and (= (type s) 'STR) (/= s "")) (setq *psp-pc3* s))
+  (princ))
+(psp-load-cfg)
 
 ;; ---------------------------------------------------------------------------
 ;; ”тилиты
@@ -940,11 +972,13 @@
 ;; в папке сборки только наши листы, альбом начинаетс€ с "SPDS_".
 ;; ÷епочка из отдельных del на каждый лист (0.42) не сработала Ч
 ;; слишком длинна€ команда. «апасной путь Ч explorer (без удалени€).
-(defun psp-open-pdf (path dir / ok cmd)
-  (princ " (открытие через ~5 с)")
-  (setq cmd (strcat "ping -n 6 127.0.0.1 > nul"
-                    " & del \"" dir "\\L*.pdf\""
-                    " & start \"\" \"" path "\""))
+(defun psp-open-pdf (path dir / ok cmd dl)
+  (setq dl (itoa (1+ *psp-open-delay-s*)))
+  (princ (strcat " (открытие через ~" (itoa *psp-open-delay-s*) " с)"))
+  (setq cmd (strcat "ping -n " dl " 127.0.0.1 > nul"))
+  (if *psp-del-singles*
+    (setq cmd (strcat cmd " & del \"" dir "\\L*.pdf\"")))
+  (setq cmd (strcat cmd " & start \"\" \"" path "\""))
   (setq ok (startapp "cmd.exe" (strcat "/c " cmd)))
   (princ (strcat "[cmd=" (psp-s->str ok) "]"))
   (if (null ok)
@@ -956,11 +990,13 @@
   ;; просмотрщике del чист, при открытом Ч ошибки блокировки).
   ;; ѕовтор€ем del ~1 минуту (12 x 5 с): листы удал€тс€, как только
   ;; просмотрщик будет закрыт.
-  (princ "\nѕ—ѕ: листы будут удал€тьс€ ещЄ ~1 мин (если просмотрщик их держал)")
-  (startapp "cmd.exe"
-            (strcat "/c for /l %i in (1,1,12)"
-                    " do @(ping -n 6 127.0.0.1 > nul"
-                    " & del \"" dir "\\L*.pdf\" 2>nul)"))
+  (if *psp-del-singles*
+    (progn
+      (princ "\nѕ—ѕ: листы будут удал€тьс€ ещЄ ~1 мин (если просмотрщик их держал)")
+      (startapp "cmd.exe"
+                (strcat "/c for /l %i in (1,1,12)"
+                        " do @(ping -n " dl " 127.0.0.1 > nul"
+                        " & del \"" dir "\\L*.pdf\" 2>nul)"))))
   ok)
 
 (defun psp-merge-pdfs (gs src-lst trg / cmd k s)
@@ -1253,7 +1289,7 @@
             (princ "\nѕ—ѕ: поиск Ghostscript ќЎ»Ѕ ј: ")
             (princ (vl-catch-all-error-message gs))
             (setq gs nil)))
-        (setq auto-merge (> (length ok-list) 3))
+        (setq auto-merge (> (length ok-list) *psp-auto-merge-n*))
         (if (and (> (length ok-list) 1) gs)
           (progn
             (if auto-merge
@@ -1290,31 +1326,47 @@
                                   "проверьте gs вручную: " (psp-s->str gs))))
                   (t
                    (princ (strcat "\n—обрано в один PDF: " (psp-s->str res)))
-                   (if *psp-open-pdf*
-                       (progn
-                         (princ "\nѕ—ѕ: открываю в просмотрщике PDF...")
+                   (if (and *psp-pdf-dir* (/= *psp-pdf-dir* ""))
+                     (progn
+                       (startapp "cmd.exe"
+                                 (strcat "/c if not exist \"" *psp-pdf-dir*
+                                         "\" md \"" *psp-pdf-dir* "\" & move /y \""
+                                         (psp-s->str res) "\" \""
+                                         *psp-pdf-dir* "\\\""))
+                       (setq res (strcat *psp-pdf-dir* "\\"
+                                         (psp-file-base dir) ".pdf"))
+                       (princ (strcat "\nѕ—ѕ: альбом сохранЄн: " res))))
+                   (if *psp-open-res*
+                     (progn
+                       (princ "\nѕ—ѕ: открываю в просмотрщике PDF...")
+                       (if *psp-del-singles*
                          (princ (strcat "\nѕ—ѕ: одиночные листы удал€ютс€ ("
-                                        (itoa (length pdfs)) " шт.)"))
-                         (psp-open-pdf (psp-s->str res) dir))))))
+                                        (itoa (length pdfs)) " шт.)")))
+                       (psp-open-pdf (psp-s->str res) dir))))))
               (progn
                 (princ "\nѕ—ѕ: сборка в один PDF пропущена.")
-                (princ (strcat "\nѕ—ѕ: открываю одиночные листы ("
-                               (itoa (length merge-list))
-                               " шт.) через ~5 с"))
-                (startapp "cmd.exe"
-                          (strcat "/c ping -n 6 127.0.0.1 > nul"
-                                  (apply 'strcat
-                                         (mapcar
-                                           '(lambda (f)
-                                              (strcat " & start \"\" \""
-                                                      dir "\\" f "\""))
-                                           (reverse merge-list))))))))
+                (if *psp-open-res*
+                  (progn
+                    (princ (strcat "\nѕ—ѕ: открываю одиночные листы ("
+                                   (itoa (length merge-list))
+                                   " шт.) через ~" (itoa *psp-open-delay-s*) " с"))
+                    (startapp "cmd.exe"
+                              (strcat "/c ping -n "
+                                      (itoa (1+ *psp-open-delay-s*))
+                                      " 127.0.0.1 > nul"
+                                      (apply 'strcat
+                                             (mapcar
+                                               '(lambda (f)
+                                                  (strcat " & start \"\" \""
+                                                          dir "\\" f "\""))
+                                               (reverse merge-list))))))))))
           (if (> (length ok-list) 1)
             (princ "\nѕ—ѕ: Ghostscript не найден Ч один PDF не собираю.\nѕ—ѕ: установите GS или задайте путь командой ѕ—ѕ√—.")))
         ;; ќдин лист без склейки: он и есть результат Ч открываем
-        (if (= (length ok-list) 1)
+        (if (and *psp-open-res* (= (length ok-list) 1))
           (startapp "cmd.exe"
-                    (strcat "/c ping -n 6 127.0.0.1 > nul & start \"\" \""
+                    (strcat "/c ping -n " (itoa (1+ *psp-open-delay-s*))
+                            " 127.0.0.1 > nul & start \"\" \""
                             dir "\\" (nth 0 (car ok-list)) ".pdf\"")))
         ;; ќткрыть папку сборки
         (psp-sleep *psp-open-delay*)
@@ -1324,11 +1376,74 @@
 (defun c:SPDSTOPDF () (c:Ё ——ѕƒ—¬ѕƒ‘))
 (princ (strcat "\nѕ—ѕ: секци€ 9/10 загружена")) (princ)
 ;; ќткрыть папку журналов и сборок в ѕроводнике
+;; ƒиалог настроек (DCL генерируетс€ во временную папку при вызове)
+(defun psp-settings-dialog ( / f dcl d id s n)
+  (setq dcl (strcat (getenv "TEMP") "\\PlotSPDSToPDF_settings.dcl"))
+  (setq f (open dcl "w"))
+  (write-line "psp_set : dialog { label = \"PlotSPDSToPDF Ч настройки\";" f)
+  (write-line "  : edit_box { key = \"dir\"; label = \"ѕапка сохранени€ PDF:\"; edit_width = 48; }" f)
+  (write-line "  : text { label = \"   (пусто = временна€ папка сборок)\"; }" f)
+  (write-line "  : edit_box { key = \"pc3\"; label = \"PDF-принтер (pc3):\"; edit_width = 34; }" f)
+  (write-line "  : edit_box { key = \"thr\"; label = \"јвтосборка при листах ЅќЋ№Ў≈:\"; edit_width = 5; }" f)
+  (write-line "  : edit_box { key = \"delay\"; label = \"«адержка открыти€, с:\"; edit_width = 5; }" f)
+  (write-line "  : toggle { key = \"openres\"; label = \"ќткрывать результат (склейку / одиночные)\"; }" f)
+  (write-line "  : toggle { key = \"dels\"; label = \"”дал€ть одиночные листы после склейки\"; }" f)
+  (write-line "  : row { spacer { width = 1; }" f)
+  (write-line "    : button { key = \"ok\"; label = \"ѕрименить\"; is_default = true; }" f)
+  (write-line "    : button { key = \"cancel\"; label = \"ќтмена\"; is_cancel = true; }" f)
+  (write-line "    spacer { width = 1; } } }" f)
+  (close f)
+  (setq d (load_dialog dcl))
+  (if (null (new_dialog "psp_set" d))
+    (progn
+      (unload_dialog d)
+      (princ (strcat "\nѕ—ѕ: диалог настроек не открылс€ (" dcl ").")))
+    (progn
+      (set_tile "dir" (if *psp-pdf-dir* *psp-pdf-dir* ""))
+      (set_tile "pc3" *psp-pc3*)
+      (set_tile "thr" (itoa *psp-auto-merge-n*))
+      (set_tile "delay" (itoa *psp-open-delay-s*))
+      (set_tile "openres" (if *psp-open-res* "1" "0"))
+      (set_tile "dels" (if *psp-del-singles* "1" "0"))
+      (mode_tile "dir" 2)
+      (action_tile "ok" "(done_dialog 1)")
+      (setq id (start_dialog))
+      (unload_dialog d)
+      (if (= id 1)
+        (progn
+          (setq s (get_tile "dir"))
+          (while (and (> (strlen s) 0) (= (substr s (strlen s) 1) "\\"))
+            (setq s (substr s 1 (1- (strlen s)))))
+          (setq *psp-pdf-dir* s)
+          (setcfg "AppData/PlotSPDS/PDFDir" s)
+          (setq s (get_tile "pc3"))
+          (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
+          (setq *psp-pc3* s)
+          (setcfg "AppData/PlotSPDS/PC3" s)
+          (setq n (atoi (get_tile "thr")))
+          (if (< n 1) (setq n 1))
+          (setq *psp-auto-merge-n* n)
+          (setcfg "AppData/PlotSPDS/AutoMergeN" (itoa n))
+          (setq n (atoi (get_tile "delay")))
+          (if (< n 0) (setq n 0))
+          (setq *psp-open-delay-s* n)
+          (setcfg "AppData/PlotSPDS/OpenDelay" (itoa n))
+          (setq *psp-open-res* (= (get_tile "openres") "1"))
+          (setcfg "AppData/PlotSPDS/OpenRes" (if *psp-open-res* "1" "0"))
+          (setq *psp-del-singles* (= (get_tile "dels") "1"))
+          (setcfg "AppData/PlotSPDS/DelSingles" (if *psp-del-singles* "1" "0"))
+          (princ "\nѕ—ѕ: настройки сохранены."))))
+  (princ)))
+
+(defun c:ѕ—ѕЌј—“–ќ… » () (psp-settings-dialog))
+(defun c:PSPSET () (c:ѕ—ѕЌј—“–ќ… »))
+
 ;; —правка: команды и однократна€ настройка Ђтихогої PDF-принтера
 (defun c:ѕ—ѕѕќћќў№ ( )
   (princ (strcat "\nPlotSPDSToPDF v" *psp-ver* " Ч экспорт форматов —ѕƒ— в PDF."))
-  (princ "\n оманды: Ё ——ѕƒ—¬ѕƒ‘ (SPDSTOPDF) Ч экспорт; ѕ—ѕѕјѕ ј (PSPPAPKA) Ч")
-  (princ "\n  папка сборок; ѕ—ѕ√— (PSPGS) Ч путь к Ghostscript;")
+  (princ "\n оманды: Ё ——ѕƒ—¬ѕƒ‘ (SPDSTOPDF) Ч экспорт; ѕ—ѕЌј—“–ќ… » (PSPSET) Ч")
+  (princ "\n  настройки (папка PDF, автосборка, задержка, принтер, удаление);")
+  (princ "\n  ѕ—ѕѕјѕ ј (PSPPAPKA) Ч папка сборок; ѕ—ѕ√— (PSPGS) Ч путь к Ghostscript;")
   (princ "\n  ѕ—ѕЁ’ќ¬ Ћ/ѕ—ѕЁ’ќ¬џ Ћ Ч эхо ленты -ѕ≈„ј“№; ѕ—ѕѕќћќў№ (PSPHELP) Ч справка.")
   (princ "\nѕор€док листов: по номеру (15, 15.1, 15.2...), Ђ0ї Ч титульный, первым.")
   (princ "\nЅольше трЄх листов Ч сборка в один PDF автоматически;")
@@ -1407,7 +1522,7 @@
 ;; ---------------------------------------------------------------------------
 
 (princ (strcat "\n«агружено: PlotSPDSToPDF.lsp v" *psp-ver*
-               " Ч команды: Ё ——ѕƒ—¬ѕƒ‘ / SPDSTOPDF, ѕ—ѕѕјѕ ј / PSPPAPKA."))
+               " Ч команды: Ё ——ѕƒ—¬ѕƒ‘ / SPDSTOPDF, ѕ—ѕѕјѕ ј / PSPPAPKA,"))
 (princ (strcat "\nѕринтер: " *psp-pc3*
                "; если листы сами открываютс€ Ч см. ѕ—ѕѕќћќў№ / PSPHELP."))
 (princ "\nƒиагностика Ё ——ѕƒ—ƒ»ј√ Ч в PlotSPDSDiag.lsp: загрузите его следом,")
