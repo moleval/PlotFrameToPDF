@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 32
+;;; Маркер редакции для RELOAD: (ред. 33
+;;; v0.33: СКЛЕЙКА ЗАРАБОТАЛА (ПСПГС -> GS[1] -> «Собрано в один PDF»),
+;;;        но файл был пуст (одна белая страница): в список склейки
+;;;        собирались ГОЛЫЕ имена (L01.pdf), gs искал их в своём рабочем
+;;;        каталоге и не находил. Теперь в склейку идут полные пути.
+;;;        Строка GS[4] печатается только если сработала ветка 4.
 ;;; v0.32: лог 0.31 показал: сработала ветка «рядом с чертежом» и
 ;;;        отдала ВЫДУМАННЫЙ путь (после 0.31 пути доверяются без
 ;;;        проверки) — GS_DLL из реестра даже не читался. Приоритет
@@ -186,7 +191,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.32")
+(setq *psp-ver* "0.33")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -813,8 +818,10 @@
                      (strcat (getvar "DWGPREFIX") "gs\\gswin32c.exe")
                      (strcat (getvar "DWGPREFIX") "gswin64c.exe")
                      (strcat (getvar "DWGPREFIX") "gswin32c.exe"))
-      (if (null res) (setq res (try p)))))
-  (if res (princ (strcat "\n  GS[4] рядом с чертежом: " res)))
+      (if (null res)
+        (progn
+          (setq res (try p))
+          (if res (princ (strcat "\n  GS[4] рядом с чертежом: " res)))))))
   ;; страховка: наружу только строка или nil
   (if (= (type res) 'STR) res nil))
 
@@ -1069,7 +1076,11 @@
             (if (member (strcase ans)
                         (list (strcase "Да") (strcase "Yes")))
               (progn
-                (setq pdfs (reverse merge-list)
+                ;; полные пути: gs ищет входные файлы в СВОЁМ рабочем
+                ;; каталоге, голые имена не находит (пустая страница)
+                (setq pdfs (mapcar
+                             '(lambda (f) (strcat dir "\\" f))
+                             (reverse merge-list))
                       merged (strcat dir "\\"
                                      (psp-file-base dir) ".pdf"))
                 (princ (strcat "\nПСП: склеиваю " (itoa (length pdfs))
