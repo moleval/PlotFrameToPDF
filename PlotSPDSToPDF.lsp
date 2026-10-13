@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 13
+;;; Маркер редакции для RELOAD: (ред. 14
+;;; v0.14: ПРИЧИНА «stringp T» НАЙДЕНА И ИСПРАВЛЕНА: булевы поля СПДС
+;;;        (группа 290) entget отдаёт как T/nil; разбор оставлял такое
+;;;        значение как есть, и (atoi T) падал. Разбор 300/40/90/290 теперь
+;;;        понимает T->"1", nil->"0" и всё прочее через vl-princ-to-string;
+;;;        кратность в экспорте читается со страховкой типа.
 ;;; v0.13: трассировка локализовала сбой: между «выбрано объектов» и
 ;;;        сортировкой (цикл сбора). Добавлены контрольные точки [1]-[6]
 ;;;        по шагам цикла: ssname -> vla-объект -> поля entget -> формат/
@@ -82,7 +87,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.13")
+(setq *psp-ver* "0.14")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -378,7 +383,10 @@
          (setq v (cdr item)
                v (cond ((= (type v) 'STR) v)
                        ((= (type v) 'INT) (itoa v))
-                       ((= (type v) 'REAL) (rtos v 2 2))))
+                       ((= (type v) 'REAL) (rtos v 2 2))
+                       ((eq v T) "1")
+                       ((null v) "0")
+                       (t (vl-princ-to-string v))))
          (setq res (cons (strcat k301 ": " v) res)
                k301 nil))
         ((and (member (car item) '(1 3))
@@ -510,7 +518,10 @@
        (setq val (cdr item)
              val (cond ((= (type val) 'STR) val)
                        ((= (type val) 'INT) (itoa val))
-                       ((= (type val) 'REAL) (rtos val 2 2))))
+                       ((= (type val) 'REAL) (rtos val 2 2))
+                       ((eq val T) "1")
+                       ((null val) "0")
+                       (t (vl-princ-to-string val))))
        (setq res (cons (cons key val) res) key nil))))
   (reverse res))
 
@@ -654,7 +665,7 @@
 
 (defun c:ЭКССПДСВПДФ ( / ss n i ent obj it items fmt sheet sheet-i
                           bb used rec media rot-str ctb dir stamp fname
-                          nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult
+                          nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult multv
                           old-bg old-paper old-trans has-trans res)
   (princ "\nЭкспорт форматов СПДС в PDF. Выберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
@@ -683,7 +694,9 @@
        (setq bb (psp-spds-bbox obj))
        (princ "\n  ПСП: [5] габариты получены")
        ;; кратность: A4 + Multiplicity 3 -> "A4X3" (бумага на 3 шага вверх)
-       (setq mult (atoi (or (psp-field flds "Multiplicity") "1")))
+       (setq multv (psp-field flds "Multiplicity"))
+       (if (/= (type multv) 'STR) (setq multv "1"))
+       (setq mult (atoi multv))
        (if (and fmt (> mult 1))
          (setq fmt (strcat fmt "X" (itoa mult))))
        (if bb
