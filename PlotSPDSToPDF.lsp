@@ -49,7 +49,11 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 53
+;;; Маркер редакции для RELOAD: (ред. 54
+;;; v0.54: поля всё ещё приходили пустыми: в ряде версий AutoCAD
+;;;        get_tile НЕ работает после закрытия диалога. Значения
+;;;        читаются в callback кнопки «Применить» (psp-tiles-read)
+;;;        ДО done_dialog; блок сохранения использует *psp-t-*.
 ;;; v0.53: «неверный тип аргумента: stringp nil», папка не сохранялась:
 ;;;        unload_dialog стоял ДО чтения get_tile (после выгрузки
 ;;;        get_tile возвращает nil). Порядок исправлен: значения
@@ -299,7 +303,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.53")
+(setq *psp-ver* "0.54")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1389,6 +1393,17 @@
 (defun c:SPDSTOPDF () (c:ЭКССПДСВПДФ))
 (princ (strcat "\nПСП: секция 9/10 загружена")) (princ)
 ;; Открыть папку журналов и сборок в Проводнике
+;; Чтение тайлов в callback кнопки «Применить»: после закрытия
+;; диалога get_tile в ряде версий AutoCAD уже не действует
+(defun psp-tiles-read ( )
+  (setq *psp-t-dir*   (psp-s->str (get_tile "dir"))
+        *psp-t-pc3*   (psp-s->str (get_tile "pc3"))
+        *psp-t-thr*   (atoi (psp-s->str (get_tile "thr")))
+        *psp-t-delay* (atoi (psp-s->str (get_tile "delay")))
+        *psp-t-openres* (= (psp-s->str (get_tile "openres")) "1")
+        *psp-t-dels*    (= (psp-s->str (get_tile "dels")) "1"))
+  (princ))
+
 ;; Диалог настроек (DCL генерируется во временную папку при вызове)
 (defun psp-settings-dialog ( / f dcl d id s n)
   (setq dcl (strcat (getenv "TEMP") "\\PlotSPDSToPDF_settings.dcl"))
@@ -1419,30 +1434,30 @@
       (set_tile "openres" (if *psp-open-res* "1" "0"))
       (set_tile "dels" (if *psp-del-singles* "1" "0"))
       (mode_tile "dir" 2)
-      (action_tile "ok" "(done_dialog 1)")
+      (action_tile "ok" "(psp-tiles-read)(done_dialog 1)")
       (setq id (start_dialog))
       (if (= id 1)
         (progn
-          (setq s (psp-s->str (get_tile "dir")))
+          (setq s *psp-t-dir*)
           (while (and (> (strlen s) 0) (= (substr s (strlen s) 1) "\\"))
             (setq s (substr s 1 (1- (strlen s)))))
           (setq *psp-pdf-dir* s)
           (setcfg "AppData/PlotSPDS/PDFDir" s)
-          (setq s (psp-s->str (get_tile "pc3")))
+          (setq s *psp-t-pc3*)
           (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
           (setq *psp-pc3* s)
           (setcfg "AppData/PlotSPDS/PC3" s)
-          (setq n (atoi (psp-s->str (get_tile "thr"))))
+          (setq n *psp-t-thr*)
           (if (< n 1) (setq n 1))
           (setq *psp-auto-merge-n* n)
           (setcfg "AppData/PlotSPDS/AutoMergeN" (itoa n))
-          (setq n (atoi (psp-s->str (get_tile "delay"))))
+          (setq n *psp-t-delay*)
           (if (< n 0) (setq n 0))
           (setq *psp-open-delay-s* n)
           (setcfg "AppData/PlotSPDS/OpenDelay" (itoa n))
-          (setq *psp-open-res* (= (psp-s->str (get_tile "openres")) "1"))
+          (setq *psp-open-res* *psp-t-openres*)
           (setcfg "AppData/PlotSPDS/OpenRes" (if *psp-open-res* "1" "0"))
-          (setq *psp-del-singles* (= (psp-s->str (get_tile "dels")) "1"))
+          (setq *psp-del-singles* *psp-t-dels*)
           (setcfg "AppData/PlotSPDS/DelSingles" (if *psp-del-singles* "1" "0"))
           (princ "\nПСП: настройки сохранены.")))))
       (unload_dialog d)
