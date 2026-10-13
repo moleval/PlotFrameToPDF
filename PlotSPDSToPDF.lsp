@@ -49,7 +49,14 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 23
+;;; Маркер редакции для RELOAD: (ред. 24
+;;; v0.24: гипотеза о вкладке Листа не подтвердилась (пользователь
+;;;        запускал из модели) — принудительный TILEMODE откатан (к тому
+;;;        же setvar «TILEMODE» капризничает после снятия зависшей
+;;;        печати). Новое: после предустановки формат читается обратно —
+;;;        в консоли видно, применился ли он («предустановка: <имя>» /
+;;;        «НЕ ПРИМЕНИЛАСЬ»); молчаливый отказ предустановки — главный
+;;;        подозреваемый в паре вопросов «Сохранить изменения...».
 ;;; v0.23: РАЗГАДКА «ЗАСТРЯВАНИЙ»: хвост «Сохранить изменения параметров
 ;;;        листа?/Перейти к печати?» — вопросы ветки ЛИСТА; при запуске с
 ;;;        вкладки листа лента шла по неверной ветке. На время экспорта
@@ -131,7 +138,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.23")
+(setq *psp-ver* "0.24")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -775,7 +782,7 @@
                           bb used rec media rot-str ctb dir stamp fname
                           nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult multv
                           old-bg old-paper old-trans has-trans res
-                          merge-list gs ans merged pdfs k old-tile)
+                          merge-list gs ans merged pdfs k chk)
   (princ "\nЭкспорт форматов СПДС в PDF. Выберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -833,7 +840,6 @@
         (if has-trans (setq old-trans (getvar "PLOTTRANSPARENCYOVERRIDE")))
         (setq old-bg (getvar "BACKGROUNDPLOT"))
         (setq old-paper (vl-catch-all-apply 'getvar (list "PAPERUPDATE")))
-        (setq old-tile (getvar "TILEMODE"))
         (psp-clear-stuck)
         (setvar "BACKGROUNDPLOT" 0)
         ;; 0 = не спрашивать "Сохранить изменения параметров листа?"/
@@ -841,9 +847,8 @@
         ;; в свежем чертеже без лишних подтверждений)
         (if (not (vl-catch-all-error-p old-paper))
           (setvar "PAPERUPDATE" 0))
-        ;; Рамки СПДС лежат в модели: печатаем всегда с вкладки Модель,
-        ;; иначе лента -ПЕЧАТЬ уходит в ветку листа
-        (setvar "TILEMODE" 1)
+
+
         (princ (strcat "\nПСП: PAPERUPDATE="
                        (itoa (getvar "PAPERUPDATE"))
                        " BACKGROUNDPLOT="
@@ -879,7 +884,15 @@
           (if (vl-catch-all-error-p res)
             (progn
               (princ "\n  ПСП: предустановка ОШИБКА: ")
-              (princ (vl-catch-all-error-message res))))
+              (princ (vl-catch-all-error-message res)))
+            (progn
+              (setq chk (vl-catch-all-apply 'psp-get (list
+                          (psp-get (psp-get (vlax-get-acad-object)
+                                            'ActiveDocument) 'ActiveLayout)
+                          'CanonicalMediaName)))
+              (princ (strcat "\n  ПСП: предустановка: "
+                             (if (and (= (type chk) 'STR) (/= chk ""))
+                               chk "НЕ ПРИМЕНИЛАСЬ")))))
           ;; Окно печати задаётся в UCS
           (setq x1 (car (trans (list (nth 4 it) (nth 5 it)) 0 1))
                 y1 (cadr (trans (list (nth 4 it) (nth 5 it)) 0 1))
@@ -923,7 +936,6 @@
         (setvar "BACKGROUNDPLOT" old-bg)
         (if (not (vl-catch-all-error-p old-paper))
           (setvar "PAPERUPDATE" old-paper))
-        (setvar "TILEMODE" old-tile)
         ;; Отчёт
         (setq ok-list (reverse ok-list))
         (princ (strcat "\nСборка: " dir))
