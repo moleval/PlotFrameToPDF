@@ -44,7 +44,11 @@
 ;;;        был вставлен В СЕРЕДИНУ строки комментария, его хвост
 ;;;        «строки (1,3,1000),» становился кодом — AutoCAD пытался
 ;;;        вызвать (1,3,1000) как функцию. Комментарий восстановлен.
-;;; Маркер редакции для RELOAD: (ред. 6
+;;; v0.8: сбой сместился в секцию 8 (большой defun диагностики).
+;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
+;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
+;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
+;;; Маркер редакции для RELOAD: (ред. 8
 ;;;
 ;;; Этапы разработки:
 ;;;   0. Диагностика — ЭКССПДСДИАГ: типы объектов, свойства, дамп.
@@ -54,7 +58,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.7")
+(setq *psp-ver* "0.8")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -765,210 +769,278 @@
 
 ;; ---------------------------------------------------------------------------
 
-(defun c:ЭКССПДСДИАГ ( / ss n i ent obj hnd doc ms e nm counts key
-                          fmt sheet total bb row f strs cands txts txtc
-                          edd dictstr dictc wr alltext)
+;; Данные диагностики передаются через переменные *psp-d-*
+(setq *psp-d-ss* nil *psp-d-n* 0 *psp-d-i* 0
+      *psp-d-ent* nil *psp-d-obj* nil *psp-d-hnd* ""
+      *psp-d-fmt* nil *psp-d-sheet* nil *psp-d-total* nil
+      *psp-d-bb* nil *psp-d-strs* nil *psp-d-cands* nil
+      *psp-d-edd* nil *psp-d-dictstr* nil *psp-d-dictc* nil
+      *psp-d-txts* nil *psp-d-txtc* nil *psp-d-wr* nil
+      *psp-d-alltext* nil *psp-d-nm* nil)
+
+;; Сумма счётчиков assoc-списка (тип . количество)
+(defun psp-sum-counts (lst / s)
+  (setq s 0)
+  (foreach p lst (setq s (+ s (cdr p))))
+  s)
+
+;; Этап 1: выбор объектов и таблица формат/лист/листов/окно
+(defun psp-diag-table ( / row)
   (princ "\nСПДС-диагностика. Выберите объекты форматов (или All).")
-  (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
+  (setq *psp-d-ss* (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
-    ((null ss)
+    ((null *psp-d-ss*)
      (princ (strcat "\nОбъектов " *psp-spds-entity* " в выборе нет."))
      (princ "\nСканирую модель по типам объектов...")
-     (setq doc (psp-get (vlax-get-acad-object) 'ActiveDocument)
-           ms (psp-get doc 'ModelSpace)
-           counts nil)
-     (if (and (not (null ms)) (not (vl-catch-all-error-p ms)))
-       (progn
-         (vlax-for e ms
-           (setq nm (psp-get e 'ObjectName))
-           (if (and (not (vl-catch-all-error-p nm)) (= (type nm) 'STR))
-             (if (assoc nm counts)
-               (setq counts (subst (cons nm (1+ (cdr (assoc nm counts))))
-                                   (assoc nm counts) counts))
-               (setq counts (cons (cons nm 1) counts)))))
-         (princ "\nТипы объектов в модели (имя | количество):")
-         (foreach key counts
-           (princ (strcat "\n  " (psp-pad-right (car key) 32)
-                          " | " (itoa (cdr key)))))
-         (princ "\nЕсли среди типов есть имя с FORMAT/СПДС — сообщите его:")
-         (princ "\nфильтр подстроится переменной *psp-spds-entity*."))
-       (princ "\nМодель недоступна для сканирования."))
-     (princ))
+     (psp-diag-model-types))
     (t
-     (setq n (sslength ss) i 0)
-     (princ (strcat "\nНайдено объектов: " (itoa n)))
+     (setq *psp-d-n* (sslength *psp-d-ss*) *psp-d-i* 0)
+     (princ (strcat "\nНайдено объектов: " (itoa *psp-d-n*)))
      (princ "\n  | объект    | формат    | канал       | лист | листов | окно |")
      (princ "\n  |-----------|-----------|-------------|------|--------|------|")
-     (while (< i n)
-       (setq ent (ssname ss i)
-             obj (vlax-ename->vla-object ent)
-             hnd (cdr (assoc 5 (entget ent)))
-             row (vl-catch-all-apply 'psp-spds-row (list obj)))
+     (while (< *psp-d-i* *psp-d-n*)
+       (setq *psp-d-ent* (ssname *psp-d-ss* *psp-d-i*)
+             *psp-d-obj* (vlax-ename->vla-object *psp-d-ent*)
+             *psp-d-hnd* (cdr (assoc 5 (entget *psp-d-ent*)))
+             row (vl-catch-all-apply 'psp-spds-row
+                   (list *psp-d-obj*)))
        (if (vl-catch-all-error-p row)
-         (princ (strcat "\n  | " (psp-pad-right hnd 9)
+         (princ (strcat "\n  | " (psp-pad-right *psp-d-hnd* 9)
                         " | ОШИБКА: "
                         (vl-catch-all-error-message row)))
          (progn
-           (setq fmt (nth 0 row)
-                 sheet (nth 1 row)
-                 total (nth 2 row)
-                 bb (nth 3 row))
-           (princ (strcat "\n  | " (psp-pad-right hnd 9)
-                          " | " (psp-pad-right (if fmt (car fmt) "-") 9)
-                          " | " (psp-pad-right (if fmt (cadr fmt) "-") 11)
-                          " | " (psp-pad-right (if sheet (car sheet) "-") 4)
-                          " | " (psp-pad-right (if total (car total) "-") 6)
-                          " | " (if bb "да" "НЕТ") " |"))))
-       (setq i (1+ i)))
-     ;; Дамп первого объекта: командная строка + файл журнала
-     (setq ent (ssname ss 0)
-           obj (vlax-ename->vla-object ent))
-     (princ "\n--- Свойства и методы первого объекта (vlax-dump-object T): ---")
-     (vl-catch-all-apply 'vlax-dump-object (list obj T))
-     ;; Универсальный экстрактор данных примитива
-     (setq nm (psp-get obj 'ObjectName)
-           strs (vl-catch-all-apply 'psp-spds-strings
-                  (list obj ent))
-           cands (if (vl-catch-all-error-p strs)
-                   nil
-                   (psp-spds-candidates strs)))
-     (if (vl-catch-all-error-p strs)
-       (progn
-         (princ "\nЭкстрактор данных: ОШИБКА — ")
-         (princ (vl-catch-all-error-message strs))
-         (setq strs nil))
-       (setq strs (reverse strs)))
-     (princ (strcat "\nObjectName: "
-                    (if (and nm (not (vl-catch-all-error-p nm))) nm "-")))
-     (princ (strcat "\nИзвлечено строк данных: "
-                    (itoa (length strs))))
-     (princ (strcat "\nКандидаты формата: "
-                    (if cands (psp-join ", " cands) "не найдены")))
-     (princ "\n--- Извлечённые строки (первые 40): ---")
-     (setq i 0)
-     (foreach s strs
-       (if (< i 40) (princ (strcat "\n  > " s)))
-       (setq i (1+ i)))
-     ;; Словарь расширения: глубокий обход (группа 360 entget)
-     (setq edd (vl-catch-all-apply 'entget (list ent '("*")))
-           dictstr nil dictc nil)
-     (if (and (not (vl-catch-all-error-p edd)) (assoc 360 edd))
-       (progn
-         (princ "\n--- Словарь расширения (группа 360): ---")
-         (setq dictstr (vl-catch-all-apply 'psp-dict-walk
-                          (list (handent (cdr (assoc 360 edd))) "" 0)))
-         (if (vl-catch-all-error-p dictstr)
-           (progn
-             (princ "\n  ОШИБКА обхода: ")
-             (princ (vl-catch-all-error-message dictstr))
-             (setq dictstr nil))
-           (progn
-             (setq dictc (psp-spds-candidates dictstr))
-             (princ (strcat "\nСтрок из словаря: "
-                            (itoa (length dictstr))))
-             (princ (strcat "\nКандидаты формата в словаре: "
-                            (if dictc (psp-join ", " dictc)
-                              "не найдены")))
-             (setq i 0)
-             (foreach s dictstr
-               (if (< i 40) (princ (strcat "\n  D> " s)))
-               (setq i (1+ i)))))))
-       (princ "\nСловаря расширения в entget нет (группы 360)."))
-     ;; План Б: тексты штампа в области рамки
-     (setq txts nil txtc nil)
-     (if bb
-       (progn
-         (setq txts (vl-catch-all-apply 'psp-texts-in-window
-                      (list (list (car bb) (cadr bb))
-                            (list (caddr bb) (cadddr bb)))))
-         (if (vl-catch-all-error-p txts)
-           (progn
-             (princ "\nСкан текстов: ОШИБКА — ")
-             (princ (vl-catch-all-error-message txts))
-             (setq txts nil))
-           (progn
-             (setq txtc (psp-spds-candidates txts))
-             (princ (strcat "\nТекстов в области рамки: "
-                            (itoa (length txts))))
-             (princ "\n--- Тексты (первые 40, сверху вниз): ---")
-             (setq i 0)
-             (foreach s txts
-               (if (< i 40) (princ (strcat "\n  > " s)))
-               (setq i (1+ i)))
-             (princ (strcat "\nКандидаты формата в текстах: "
-                            (if txtc (psp-join ", " txtc)
-                              "не найдены")))))))
-     ;; Расширенный отчёт по области: все типы, блоки, атрибуты
-     (setq wr nil)
-     (if bb
-       (progn
-         (setq wr (vl-catch-all-apply 'psp-window-report
-                      (list (list (car bb) (cadr bb))
-                            (list (caddr bb) (cadddr bb)))))
-         (if (vl-catch-all-error-p wr)
-           (progn
-             (princ "\nОтчёт по окну: ОШИБКА — ")
-             (princ (vl-catch-all-error-message wr))
-             (setq wr nil))
-           (progn
-             (princ (strcat "\n--- Объекты в окне по типам (всего "
-                            (itoa (apply '+
-                                    (mapcar 'cdr (car wr)))) "): ---")
-             (foreach key (car wr)
-               (princ (strcat "\n  " (psp-pad-right (car key) 24)
-                              " | " (itoa (cdr key)))))
-             (princ "\n--- Блоки (имя | количество): ---")
-             (foreach key (cadr wr)
-               (princ (strcat "\n  " (psp-pad-right (car key) 24)
-                              " | " (itoa (cdr key)))))
-             (setq alltext (append (if txts txts nil)
-                                   (nth 2 wr)))
-             (princ (strcat "\nТекстов с учётом атрибутов и блоков: "
-                            (itoa (length alltext))))
-             (setq txtc (psp-spds-candidates alltext))
-             (princ (strcat "\nКандидаты формата (все источники): "
-                            (if txtc (psp-join ", " txtc)
-                              "не найдены")))
-             (if (null alltext)
-               (princ
-                 "\nЕсли штамп видим, но текстов 0: проверьте, что все")
-               (princ "\n  слои разморожены и включены — ssget не видит")
-               (princ "\n  примитивы на выключенных/замороженных слоях."))))
-         (princ)))
-     ;; Полный журнал
-     (setq f (open (strcat (psp-output-dir) "\\spds_diag.txt") "a"))
-     (if f
-       (progn
-         (write-line "---- SPDSFORMAT ----" f)
-         (write-line (strcat "ObjectName: "
-                             (if (and nm (not (vl-catch-all-error-p nm)))
-                               nm "-")) f)
-         (write-line (strcat "candidates: " (psp-join ", " cands)) f)
-         (foreach s dictstr (write-line (strcat "DICT: " s)) f)
-         (write-line (strcat "texts-in-window: "
-                             (if txts (itoa (length txts)) "-")) f)
-         (write-line (strcat "candidates-from-texts: "
-                             (if txtc (psp-join ", " txtc) "-")) f)
-         (if wr
-           (progn
-             (foreach key (car wr)
-               (write-line (strcat "TYPE: " (car key) " | "
-                                   (itoa (cdr key))) f))
-             (foreach key (cadr wr)
-               (write-line (strcat "BLOCK: " (car key) " | "
-                                   (itoa (cdr key))) f))))
-         (write-line (vl-prin1-to-string edd) f)
-         (foreach s strs (write-line (strcat "STR: " s)) f)
-         (foreach s txts (write-line (strcat "TXT: " s)) f)
-         (if wr
-           (foreach s (nth 2 wr)
-             (write-line (strcat "BTXT: " (nth 2 s)) f)))
-         (close f)
-         (princ (strcat "\nПолные данные дописаны: "
-                        (psp-output-dir) "\\spds_diag.txt")))
-       (princ "\nФайл журнала недоступен для записи."))
-     (princ "\nПришлите весь вывод команды и spds_diag.txt с этой страницы.")
-     (princ)))
+           (setq *psp-d-fmt* (nth 0 row)
+                 *psp-d-sheet* (nth 1 row)
+                 *psp-d-total* (nth 2 row)
+                 *psp-d-bb* (nth 3 row))
+           (princ (strcat "\n  | " (psp-pad-right *psp-d-hnd* 9)
+                          " | " (psp-pad-right
+                                  (if *psp-d-fmt* (car *psp-d-fmt*) "-") 9)
+                          " | " (psp-pad-right
+                                  (if *psp-d-fmt* (cadr *psp-d-fmt*) "-") 11)
+                          " | " (psp-pad-right
+                                  (if *psp-d-sheet*
+                                    (car *psp-d-sheet*) "-") 4)
+                          " | " (psp-pad-right
+                                  (if *psp-d-total*
+                                    (car *psp-d-total*) "-") 6)
+                          " | " (if *psp-d-bb* "да" "НЕТ") " |"))))
+       (setq *psp-d-i* (1+ *psp-d-i*)))
+     ;; Первый объект — кандидат на глубокую диагностику
+     (setq *psp-d-ent* (ssname *psp-d-ss* 0)
+           *psp-d-obj* (vlax-ename->vla-object *psp-d-ent*)))))
+
+;; Этап 1а: скан типов объектов модели (когда выбор пуст)
+(defun psp-diag-model-types ( / doc ms e nm key counts)
+  (setq doc (psp-get (vlax-get-acad-object) 'ActiveDocument)
+        ms (psp-get doc 'ModelSpace)
+        counts nil)
+  (if (and (not (null ms)) (not (vl-catch-all-error-p ms)))
+    (progn
+      (vlax-for e ms
+        (setq nm (psp-get e 'ObjectName))
+        (if (and (not (vl-catch-all-error-p nm)) (= (type nm) 'STR))
+          (if (assoc nm counts)
+            (setq counts (subst (cons nm (1+ (cdr (assoc nm counts))))
+                                (assoc nm counts) counts))
+            (setq counts (cons (cons nm 1) counts)))))
+      (princ "\nТипы объектов в модели (имя | количество):")
+      (foreach key counts
+        (princ (strcat "\n  " (psp-pad-right (car key) 32)
+                       " | " (itoa (cdr key)))))
+      (princ "\nЕсли среди типов есть имя с FORMAT/СПДС — сообщите его:")
+      (princ "\nфильтр подстроится переменной *psp-spds-entity*."))
+    (princ "\nМодель недоступна для сканирования."))
+  (princ))
+
+;; Этап 2: дамп объекта и универсальный экстрактор данных
+(defun psp-diag-extract ()
+  (princ "\n--- Свойства и методы первого объекта (vlax-dump-object T): ---")
+  (vl-catch-all-apply 'vlax-dump-object (list *psp-d-obj* T))
+  (setq *psp-d-nm* (psp-get *psp-d-obj* 'ObjectName)
+        *psp-d-strs* (vl-catch-all-apply 'psp-spds-strings
+                         (list *psp-d-obj* *psp-d-ent*)))
+  (if (vl-catch-all-error-p *psp-d-strs*)
+    (progn
+      (princ "\nЭкстрактор данных: ОШИБКА — ")
+      (princ (vl-catch-all-error-message *psp-d-strs*))
+      (setq *psp-d-strs* nil))
+    (progn
+      (setq *psp-d-strs* (reverse *psp-d-strs*)
+            *psp-d-cands* (psp-spds-candidates *psp-d-strs*))))
+  (princ (strcat "\nObjectName: "
+                 (if (and *psp-d-nm* (not (vl-catch-all-error-p *psp-d-nm*)))
+                   *psp-d-nm* "-")))
+  (princ (strcat "\nИзвлечено строк данных: "
+                 (itoa (length *psp-d-strs*))))
+  (princ (strcat "\nКандидаты формата: "
+                 (if *psp-d-cands*
+                   (psp-join ", " *psp-d-cands*) "не найдены")))
+  (princ "\n--- Извлечённые строки (первые 40): ---")
+  (setq *psp-d-i* 0)
+  (foreach s *psp-d-strs*
+    (if (< *psp-d-i* 40) (princ (strcat "\n  > " s)))
+    (setq *psp-d-i* (1+ *psp-d-i*)))
+  (princ))
+
+(princ (strcat "\nПСП: секция 8a/10 загружена")) (princ)
+
+;; Этап 3: глубокий обход словаря расширения (группа 360)
+(defun psp-diag-dict ()
+  (setq *psp-d-edd*
+        (vl-catch-all-apply 'entget (list *psp-d-ent* '("*")))
+        *psp-d-dictstr* nil *psp-d-dictc* nil)
+  (if (and (not (vl-catch-all-error-p *psp-d-edd*))
+           (assoc 360 *psp-d-edd*))
+    (progn
+      (princ "\n--- Словарь расширения (группа 360): ---")
+      (setq *psp-d-dictstr*
+            (vl-catch-all-apply 'psp-dict-walk
+              (list (handent (cdr (assoc 360 *psp-d-edd*))) "" 0)))
+      (if (vl-catch-all-error-p *psp-d-dictstr*)
+        (progn
+          (princ "\n  ОШИБКА обхода: ")
+          (princ (vl-catch-all-error-message *psp-d-dictstr*))
+          (setq *psp-d-dictstr* nil))
+        (progn
+          (setq *psp-d-dictc*
+                (psp-spds-candidates *psp-d-dictstr*))
+          (princ (strcat "\nСтрок из словаря: "
+                         (itoa (length *psp-d-dictstr*))))
+          (princ (strcat "\nКандидаты формата в словаре: "
+                         (if *psp-d-dictc*
+                           (psp-join ", " *psp-d-dictc*) "не найдены")))
+          (setq *psp-d-i* 0)
+          (foreach s *psp-d-dictstr*
+            (if (< *psp-d-i* 40) (princ (strcat "\n  D> " s)))
+            (setq *psp-d-i* (1+ *psp-d-i*))))))
+    (princ "\nСловаря расширения в entget нет (группы 360)."))
+  (princ))
+
+;; Этап 4: тексты штампа в области рамки
+(defun psp-diag-texts ()
+  (setq *psp-d-txts* nil *psp-d-txtc* nil)
+  (if *psp-d-bb*
+    (progn
+      (setq *psp-d-txts*
+            (vl-catch-all-apply 'psp-texts-in-window
+              (list (list (car *psp-d-bb*) (cadr *psp-d-bb*))
+                    (list (caddr *psp-d-bb*) (cadddr *psp-d-bb*)))))
+      (if (vl-catch-all-error-p *psp-d-txts*)
+        (progn
+          (princ "\nСкан текстов: ОШИБКА — ")
+          (princ (vl-catch-all-error-message *psp-d-txts*))
+          (setq *psp-d-txts* nil))
+        (progn
+          (setq *psp-d-txtc*
+                (psp-spds-candidates *psp-d-txts*))
+          (princ (strcat "\nТекстов в области рамки: "
+                         (itoa (length *psp-d-txts*))))
+          (princ "\n--- Тексты (первые 40, сверху вниз): ---")
+          (setq *psp-d-i* 0)
+          (foreach s *psp-d-txts*
+            (if (< *psp-d-i* 40) (princ (strcat "\n  > " s)))
+            (setq *psp-d-i* (1+ *psp-d-i*)))
+          (princ (strcat "\nКандидаты формата в текстах: "
+                         (if *psp-d-txtc*
+                           (psp-join ", " *psp-d-txtc*) "не найдены")))))))
+  (princ))
+
+;; Этап 5: расширенный отчёт по области (типы, блоки, атрибуты)
+(defun psp-diag-window ()
+  (setq *psp-d-wr* nil *psp-d-alltext* nil)
+  (if *psp-d-bb*
+    (progn
+      (setq *psp-d-wr*
+            (vl-catch-all-apply 'psp-window-report
+              (list (list (car *psp-d-bb*) (cadr *psp-d-bb*))
+                    (list (caddr *psp-d-bb*) (cadddr *psp-d-bb*)))))
+      (if (vl-catch-all-error-p *psp-d-wr*)
+        (progn
+          (princ "\nОтчёт по окну: ОШИБКА — ")
+          (princ (vl-catch-all-error-message *psp-d-wr*))
+          (setq *psp-d-wr* nil))
+        (progn
+          (princ (strcat "\n--- Объекты в окне по типам (всего "
+                         (itoa (psp-sum-counts (car *psp-d-wr*)))
+                         "): ---"))
+          (foreach key (car *psp-d-wr*)
+            (princ (strcat "\n  " (psp-pad-right (car key) 24)
+                           " | " (itoa (cdr key)))))
+          (princ "\n--- Блоки (имя | количество): ---")
+          (foreach key (cadr *psp-d-wr*)
+            (princ (strcat "\n  " (psp-pad-right (car key) 24)
+                           " | " (itoa (cdr key)))))
+          (setq *psp-d-alltext*
+                (append *psp-d-txts* (nth 2 *psp-d-wr*)))
+          (princ (strcat "\nТекстов с учётом атрибутов и блоков: "
+                         (itoa (length *psp-d-alltext*))))
+          (setq *psp-d-txtc*
+                (psp-spds-candidates *psp-d-alltext*))
+          (princ (strcat "\nКандидаты формата (все источники): "
+                         (if *psp-d-txtc*
+                           (psp-join ", " *psp-d-txtc*) "не найдены"))))
+          (if (null *psp-d-alltext*)
+            (progn
+              (princ
+                "\nЕсли штамп видим, но текстов 0: проверьте, что все")
+              (princ "\n  слои разморожены и включены — ssget не видит")
+              (princ "\n  примитивы на выключенных/замороженных слоях."))))))
+  (princ))
+
+(princ (strcat "\nПСП: секция 8b/10 загружена")) (princ)
+
+;; Этап 6: полный журнал
+(defun psp-diag-journal ( / f)
+  (setq f (open (strcat (psp-output-dir) "\\spds_diag.txt") "a"))
+  (if f
+    (progn
+      (write-line "---- SPDSFORMAT ----" f)
+      (write-line (strcat "ObjectName: "
+                          (if (and *psp-d-nm*
+                                   (not (vl-catch-all-error-p *psp-d-nm*)))
+                            *psp-d-nm* "-")) f)
+      (write-line (strcat "candidates: "
+                          (if *psp-d-cands* (psp-join ", " *psp-d-cands*) "-")) f)
+      (foreach s *psp-d-dictstr*
+        (write-line (strcat "DICT: " s)) f)
+      (write-line (strcat "texts-in-window: "
+                          (itoa (length *psp-d-txts*))) f)
+      (write-line (strcat "candidates-from-texts: "
+                          (if *psp-d-txtc* (psp-join ", " *psp-d-txtc*) "-")) f)
+      (if *psp-d-wr*
+        (progn
+          (foreach key (car *psp-d-wr*)
+            (write-line (strcat "TYPE: " (car key) " | "
+                                (itoa (cdr key))) f))
+          (foreach key (cadr *psp-d-wr*)
+            (write-line (strcat "BLOCK: " (car key) " | "
+                                (itoa (cdr key))) f))))
+      (write-line (vl-prin1-to-string *psp-d-edd*) f)
+      (foreach s *psp-d-strs* (write-line (strcat "STR: " s)) f)
+      (foreach s *psp-d-txts* (write-line (strcat "TXT: " s)) f)
+      (if *psp-d-wr*
+        (foreach s (nth 2 *psp-d-wr*)
+          (write-line (strcat "BTXT: " (nth 2 s)) f)))
+      (close f)
+      (princ (strcat "\nПолные данные дописаны: "
+                     (psp-output-dir) "\\spds_diag.txt")))
+    (princ "\nФайл журнала недоступен для записи."))
+  (princ "\nПришлите весь вывод команды и spds_diag.txt с этой страницы.")
+  (princ))
+
+(princ (strcat "\nПСП: секция 8c/10 загружена")) (princ)
+
+;; Диагностика: оркестратор
+(defun c:ЭКССПДСДИАГ ()
+  (psp-diag-table)
+  (if *psp-d-ss*
+    (progn
+      (psp-diag-extract)
+      (psp-diag-dict)
+      (psp-diag-texts)
+      (psp-diag-window)
+      (psp-diag-journal)))
   (princ))
 
 (defun c:SPDSDIAG () (c:ЭКССПДСДИАГ))
