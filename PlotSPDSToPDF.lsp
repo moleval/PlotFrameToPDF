@@ -49,7 +49,15 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 17
+;;; Маркер редакции для RELOAD: (ред. 18
+;;; v0.18: прогон 0.17: пара «Сохранить изменения параметров листа?»/
+;;;        «Перейти к печати?» вклинилась в ленту (в прогоне 4/4 была
+;;;        подавлена PAPERUPDATE=0) — лента сдвинулась, все листы ушли
+;;;        в «_As». Добавлены: печать фактических PAPERUPDATE/
+;;;        BACKGROUNDPLOT перед циклом (видно, принялся ли 0); после
+;;;        каждой печати проверка CMDACTIVE — застрявший вопрос
+;;;        снимается по ESC (psp-clear-stuck), лист помечается
+;;;        пропущенным, каскад сдвига невозможен.
 ;;; v0.17: по выбору пользователя имена файлов: L01.pdf, L02.pdf...
 ;;;        (префикс L + номер листа; дубликаты номера: L01_2, L01_3).
 ;;; v0.16: прогон 4/4 без вопросов (PAPERUPDATE=0 подтвердился в свежем
@@ -99,7 +107,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.17")
+(setq *psp-ver* "0.18")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -741,7 +749,15 @@
         ;; 0 = не спрашивать "Сохранить изменения параметров листа?"/
         ;; "Перейти к печати?" при несовпадении размеров (первая печать
         ;; в свежем чертеже без лишних подтверждений)
-        (if (not (vl-catch-all-error-p old-paper)) (setvar "PAPERUPDATE" 0))
+        (if (not (vl-catch-all-error-p old-paper))
+          (setvar "PAPERUPDATE" 0))
+        (princ (strcat "\nПСП: PAPERUPDATE="
+                       (itoa (getvar "PAPERUPDATE"))
+                       " BACKGROUNDPLOT="
+                       (itoa (getvar "BACKGROUNDPLOT"))))
+        (if (and (not (vl-catch-all-error-p old-paper))
+                 (/= (getvar "PAPERUPDATE") 0))
+          (princ "\nПСП: ВНИМАНИЕ: PAPERUPDATE не принят = 0!"))
         (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" 1))
         ;; Цикл печати
         (setq used nil ok-list nil j 0)
@@ -780,10 +796,19 @@
                       (list (strcat fname ".pdf") media rot-str ctb
                             x1 y1 x2 y2)))
           (psp-page-restore)
-          (if (vl-catch-all-error-p res)
-            (princ "  ошибка печати, см. ниже")
-            (princ "  отправлено на печать."))
-          (if (vl-catch-all-error-p res)
+          ;; Если -ПЕЧАТЬ застряла на незапланированном вопросе, в стеке
+          ;; остаётся CMDACTIVE; его остатки сдвинули бы следующую ленту.
+          ;; Снимаем по ESC (без пустых Enter) и пропускаем лист.
+          (if (> (getvar "CMDACTIVE") 0)
+            (progn
+              (princ "\n  ПСП: -ПЕЧАТЬ застряла на вопросе, снимаю по ESC.")
+              (psp-clear-stuck)
+              (setq skip (cons (car nm-n) skip)))
+            (if (vl-catch-all-error-p res)
+              (princ "  ошибка печати, см. ниже")
+              (princ "  отправлено на печать.")))
+          (if (and (vl-catch-all-error-p res)
+                   (= (getvar "CMDACTIVE") 0))
             (progn
               (princ (strcat "\nПСП: ОШИБКА [этап: " *psp-stage*
                              "] — " (vl-catch-all-error-message res)))
