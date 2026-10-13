@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 12
+;;; Маркер редакции для RELOAD: (ред. 13
+;;; v0.13: трассировка локализовала сбой: между «выбрано объектов» и
+;;;        сортировкой (цикл сбора). Добавлены контрольные точки [1]-[6]
+;;;        по шагам цикла: ssname -> vla-объект -> поля entget -> формат/
+;;;        лист -> габариты -> сбор позиции. Последняя напечатанная точка
+;;;        укажет оператор, вызывающий «stringp T».
 ;;; v0.12: по логу первого прогона ЭКССПДСВПДФ: необнаруженная ошибка
 ;;;        «неверный тип аргумента: stringp T» — добавлена поэтапная
 ;;;        трассировка печати (объектов/сортировка/папка/каждый лист),
@@ -77,7 +82,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.12")
+(setq *psp-ver* "0.13")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -660,15 +665,23 @@
      (setq n (sslength ss) i 0 items nil skip nil)
      (princ (strcat "\nПСП: выбрано объектов: " (itoa n)))
      (while (< i n)
-       (setq ent (ssname ss i)
-             obj (vlax-ename->vla-object ent)
-             flds (psp-spds-fields ent)
-             fmt (or (psp-field flds "Format")
-                     (psp-spds-prop obj *psp-spds-props-format*))
-             sheet (or (psp-field flds "Sheet")
-                       (psp-spds-prop obj *psp-spds-props-sheet*))
-             sheet-i (atoi (if sheet sheet "0"))
-             bb (psp-spds-bbox obj))
+       (setq ent (ssname ss i))
+       (princ "\n  ПСП: [1] имя объекта получено")
+       (setq obj (vlax-ename->vla-object ent))
+       (princ "\n  ПСП: [2] vla-объект готов")
+       (setq flds (psp-spds-fields ent))
+       (princ (strcat "\n  ПСП: [3] полей entget: " (itoa (length flds))))
+       (setq fmt (psp-field flds "Format"))
+       (if (null fmt)
+         (setq fmt (psp-spds-prop obj *psp-spds-props-format*)))
+       (setq sheet (psp-field flds "Sheet"))
+       (if (null sheet)
+         (setq sheet (psp-spds-prop obj *psp-spds-props-sheet*)))
+       (setq sheet-i (atoi (if sheet sheet "0")))
+       (princ (strcat "\n  ПСП: [4] формат=" (if fmt fmt "-")
+                      " лист=" (if sheet sheet "-")))
+       (setq bb (psp-spds-bbox obj))
+       (princ "\n  ПСП: [5] габариты получены")
        ;; кратность: A4 + Multiplicity 3 -> "A4X3" (бумага на 3 шага вверх)
        (setq mult (atoi (or (psp-field flds "Multiplicity") "1")))
        (if (and fmt (> mult 1))
@@ -680,6 +693,7 @@
                            (car bb) (cadr bb) (caddr bb) (cadddr bb))
                      items))
          (setq skip (cons (cdr (assoc 5 (entget ent))) skip)))
+       (princ "\n  ПСП: [6] объект собран")
        (setq i (1+ i)))
      (setq items (psp-spds-sorted (reverse items)))
      (princ (strcat "\nПСП: к печати после сортировки: " (itoa (length items))))
