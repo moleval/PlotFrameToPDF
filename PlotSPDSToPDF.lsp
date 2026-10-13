@@ -9,7 +9,13 @@
 ;;;          ЭКССПДСВПДФ / SPDSTOPDF — серийный экспорт в PDF
 ;;;
 ;;; Кодировка: CP1251 (ANSI), без BOM.
-;;; Маркер редакции для RELOAD: (ред. 1
+;;; v0.2: GetBoundingBox через vl-catch-all-apply привязывает к символам
+;;;        СЫРОЙ safearray (не variant) — незащищённый vlax-variant-value
+;;;        падал с «неверный тип аргумента: variantp». Добавлен
+;;;        конвертер psp-va->list (variant -> значение, safearray
+;;;        проходит насквозь); разбор строки таблицы диагностики
+;;;        обёрнут в перехват — один плохой объект не роняет отчёт.
+;;; Маркер редакции для RELOAD: (ред. 2
 ;;;
 ;;; Этапы разработки:
 ;;;   0. Диагностика — ЭКССПДСДИАГ: типы объектов, свойства, дамп.
@@ -19,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.1")
+(setq *psp-ver* "0.2")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -79,6 +85,15 @@
 (defun psp-safe-put (obj prop val)
   (not (vl-catch-all-error-p
          (vl-catch-all-apply 'vlax-put-property (list obj prop val)))))
+
+;; variant -> значение; safearray/прочее -> как есть; nil при ошибке.
+(defun psp-va->list-unwrap (x / v)
+  (cond
+    ((null x) nil)
+    ((= (type x) 'VARIANT)
+     (setq v (vl-catch-all-apply 'vlax-variant-value (list x)))
+     (if (vl-catch-all-error-p v) nil v))
+    (t x)))
 
 (defun psp-pad-right (s width / n)
   (setq n (- width (strlen s)))
@@ -221,9 +236,7 @@
         (setq v (psp-get obj nm))
         (if (not (vl-catch-all-error-p v))
           (progn
-            (setq val (vl-catch-all-apply 'vlax-variant-value
-                                          (list v)))
-            (if (vl-catch-all-error-p val) (setq val nil))
+            (setq val (psp-va->list-unwrap v))
             (if (not (null val))
               (setq val (cond
                           ((= (type val) 'STR) (if (= val "") nil val))
@@ -237,19 +250,27 @@
   (setq r (psp-spds-prop-ex obj names))
   (if r (car r) nil))
 
+;; Свойства строки диагностики: (формат-имя лист листов габариты).
+(defun psp-spds-row (obj)
+  (list (psp-spds-prop-ex obj *psp-spds-props-format*)
+        (psp-spds-prop-ex obj *psp-spds-props-sheet*)
+        (psp-spds-prop-ex obj *psp-spds-props-total*)
+        (psp-spds-bbox obj)))
+
 ;; Габариты объекта в WCS: (llx lly urx ury) или nil.
+;; GetBoundingBox через vl-catch-all-apply привязывает к символам
+;; safearray (иногда variant) — оба варианта разбирает psp-va->list-unwrap.
 (defun psp-spds-bbox (obj / mn mx a b)
   (vl-catch-all-apply 'vla-getboundingbox (list obj 'mn 'mx))
-  (if (and (boundp 'mn) (not (vl-catch-all-error-p mn))
-           (boundp 'mx) (not (vl-catch-all-error-p mx)))
+  (if (and (boundp 'mn) (boundp 'mx))
     (progn
       (setq a (vl-catch-all-apply 'vlax-safearray->list
-                                  (list (vlax-variant-value mn)))
+                                  (list (psp-va->list-unwrap mn)))
             b (vl-catch-all-apply 'vlax-safearray->list
-                                  (list (vlax-variant-value mx))))
+                                  (list (psp-va->list-unwrap mx))))
       (if (and (not (vl-catch-all-error-p a))
                (not (vl-catch-all-error-p b))
-               (= (length a) 3) (= (length b) 3))
+               a b (= (length a) 3) (= (length b) 3))
         (list (car a) (cadr a) (car b) (cadr b))
         nil))
     nil))
@@ -351,7 +372,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defun c:ЭКССПДСДИАГ ( / ss n i ent obj hnd doc ms e nm counts key
-                          fmt fmt-ch sheet sheet-ch total total-ch bb f)
+                          fmt sheet total bb row f)
   (princ "\nСПДС-диагностика. Выберите объекты форматов (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -387,16 +408,22 @@
        (setq ent (ssname ss i)
              obj (vlax-ename->vla-object ent)
              hnd (cdr (assoc 5 (entget ent)))
-             fmt (psp-spds-prop-ex obj *psp-spds-props-format*)
-             sheet (psp-spds-prop-ex obj *psp-spds-props-sheet*)
-             total (psp-spds-prop-ex obj *psp-spds-props-total*)
-             bb (psp-spds-bbox obj))
-       (princ (strcat "\n  | " (psp-pad-right hnd 9)
-                      " | " (psp-pad-right (if fmt (car fmt) "-") 9)
-                      " | " (psp-pad-right (if fmt (cadr fmt) "-") 11)
-                      " | " (psp-pad-right (if sheet (car sheet) "-") 4)
-                      " | " (psp-pad-right (if total (car total) "-") 6)
-                      " | " (if bb "да" "НЕТ") " |"))
+             row (vl-catch-all-apply 'psp-spds-row (list obj)))
+       (if (vl-catch-all-error-p row)
+         (princ (strcat "\n  | " (psp-pad-right hnd 9)
+                        " | ОШИБКА: "
+                        (vl-catch-all-error-message row)))
+         (progn
+           (setq fmt (nth 0 row)
+                 sheet (nth 1 row)
+                 total (nth 2 row)
+                 bb (nth 3 row))
+           (princ (strcat "\n  | " (psp-pad-right hnd 9)
+                          " | " (psp-pad-right (if fmt (car fmt) "-") 9)
+                          " | " (psp-pad-right (if fmt (cadr fmt) "-") 11)
+                          " | " (psp-pad-right (if sheet (car sheet) "-") 4)
+                          " | " (psp-pad-right (if total (car total) "-") 6)
+                          " | " (if bb "да" "НЕТ") " |"))))
        (setq i (1+ i)))
      ;; Дамп первого объекта: командная строка + файл журнала
      (setq ent (ssname ss 0)
