@@ -27,7 +27,15 @@
 ;;;        (TEXT/MTEXT/ATTRIB по габаритам объекта, сортировка сверху
 ;;;        вниз). Добавлен скан текстов; XData (группы 1000+) добавлен
 ;;;        в экстрактор; исправлен разбор вариантов XRecord.
-;;; Маркер редакции для RELOAD: (ред. 4
+;;; v0.5: по логу v0.4: HasExtensionDictionary = -1 — словарь ЕСТЬ,
+;;;        но XRecord'ов в нём не нашлось (COM-обход не увидел).
+;;;        Добавлен глубокий обход словаря расширения через dictnext
+;;;        (группа 360 entget; вложенные словари рекурсивно; XRecord'ы
+;;;        читаются entget'ом напрямую). Диагностика области расширена:
+;;;        все типы объектов в окне, блоки, атрибуты, тексты из
+;;;        определений блоков. ПроверкаPlotSPDS: закрытый продукт,
+;;;        функциональный ориентир — сортировка/имёнование/многопаг PDF.
+;;; Маркер редакции для RELOAD: (ред. 5
 ;;;
 ;;; Этапы разработки:
 ;;;   0. Диагностика — ЭКССПДСДИАГ: типы объектов, свойства, дамп.
@@ -37,7 +45,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.4")
+(setq *psp-ver* "0.5")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -600,12 +608,140 @@
 
 (defun psp-text-str (it) (nth 2 it))
 
+;; Извлечение читаемых строк из entget XRecord'а: строки (1,3,1000),
+;; бинарные (310-312, 1004) через hex, числа печатает vl-princ-to-string.
+(defun psp-xrecord-strings (ed / item runs res)
+  (setq res nil)
+  (foreach item ed
+    (cond
+      ((and (member (car item) '(1 3 1000))
+            (= (type (cdr item)) 'STR)
+            (> (strlen (cdr item)) 1))
+       (setq res (cons (cdr item) res)))
+      ((and (member (car item) '(310 311 312 1004))
+            (= (type (cdr item)) 'STR))
+       (setq runs (psp-printable-runs (psp-hex->str (cdr item)) 4))
+       (foreach s runs (setq res (cons s res))))))
+  (reverse res))
+
+;; Глубокий обход словаря (ename): печатает структуру, собирает строки.
+;; depth — уровень вложенности; рекурсия в ACDBDICTIONARY до 4.
+(defun psp-dict-walk (dict-ename prefix depth / item en ed tp key strs
+                                      nm sub)
+  (setq strs nil)
+  (if (< depth 4)
+    (progn
+      (setq item (dictnext dict-ename T))
+      (setq nm 0)
+      (while (and item (< nm 200))
+        (setq en (cdr (assoc -1 item))
+              key (cdr (assoc 3 item))
+              ed (entget en)
+              tp (cdr (assoc 0 ed)))
+        (princ (strcat "\n  " prefix key " : " tp))
+        (cond
+          ((= (strcase tp) "XRECORD")
+           (foreach s (psp-xrecord-strings ed)
+             (princ (strcat "\n    > " s))
+             (setq strs (cons s strs))))
+          ((= (strcase tp) "ACDBDICTIONARY")
+           (foreach s (psp-dict-walk en (strcat prefix key "/")
+                                     (1+ depth))
+             (setq strs (cons s strs))))
+          ((and (= (type (cdr (assoc 1 ed))) 'STR)
+                (> (strlen (cdr (assoc 1 ed))) 1))
+           (princ (strcat "\n    > " (cdr (assoc 1 ed))))
+           (setq strs (cons (cdr (assoc 1 ed)) strs))))
+        (setq item (dictnext dict-ename nil)
+              nm (1+ nm)))))
+  (reverse strs))
+
+;; Отчёт по области окна БЕЗ фильтра: типы объектов, блоки, атрибуты,
+;; тексты из определений блоков. Возвращает (counts inserts texts).
+(defun psp-block-def-texts (blkname / rec e ed tp s pt res)
+  (setq res nil rec (tblsearch "BLOCK" blkname))
+  (if rec
+    (progn
+      (setq e (cdr (assoc -2 rec)))
+      (while e
+        (setq ed (entget e)
+              tp (cdr (assoc 0 ed))
+              s "")
+        (cond
+          ((or (= tp "TEXT") (= tp "ATTRIB"))
+           (setq s (cdr (assoc 1 ed))))
+          ((= tp "MTEXT")
+           (foreach gc ed
+             (if (and (member (car gc) '(1 3))
+                      (= (type (cdr gc)) 'STR))
+               (setq s (strcat s (cdr gc)))))))
+        (if (and s (/= s ""))
+          (progn
+            (setq pt (cdr (assoc 10 ed)))
+            (setq res (cons (list (cadr pt) (car pt) s) res))))
+        (setq e (entnext e)))))
+  (reverse res))
+
+;; Атрибуты вставки: список строк (y x текст).
+(defun psp-insert-attribs (ins-ename / e ed res pt)
+  (setq res nil
+        e (entnext ins-ename))
+  (while (and e
+              (setq ed (entget e))
+              (/= (cdr (assoc 0 ed)) "SEQEND"))
+    (if (= (cdr (assoc 0 ed)) "ATTRIB")
+      (progn
+        (setq pt (cdr (assoc 10 ed)))
+        (setq res (cons (list (cadr pt) (car pt)
+                              (cdr (assoc 1 ed))) res))))
+    (setq e (entnext e)))
+  (reverse res))
+
+;; Счётчик: (тип . кол) в assoc-списке.
+(defun psp-count-inc (lst key / pair)
+  (if (assoc key lst)
+    (subst (cons key (1+ (cdr (assoc key lst)))) (assoc key lst) lst)
+    (cons (cons key 1) lst)))
+
+;; Полный отчёт по окну: (counts inserts texts)
+(defun psp-window-report (p1 p2 / ss n i ed tp counts ins-names atts
+                              def-texts seen txts)
+  (setq counts nil ins-names nil seen nil txts nil)
+  (setq ss (vl-catch-all-apply 'ssget (list "_C" p1 p2)))
+  (if (and ss (not (vl-catch-all-error-p ss)))
+    (progn
+      (setq n (sslength ss) i 0)
+      (while (< i n)
+        (setq ed (entget (ssname ss i))
+              tp (cdr (assoc 0 ed))
+              counts (psp-count-inc counts tp))
+        (if (= tp "INSERT")
+          (progn
+            (setq ins-names
+                  (psp-count-inc ins-names (cdr (assoc 2 ed))))
+            (if (< (length txts) 200)
+              (progn
+                (setq atts (psp-insert-attribs (ssname ss i)))
+                (foreach it atts (setq txts (cons it txts)))))))
+        (setq i (1+ i)))
+      ;; Тексты из определений уникальных блоков
+      (foreach bn ins-names
+        (if (and (< (length seen) 20)
+                 (not (member (car bn) seen)))
+          (progn
+            (setq seen (cons (car bn) seen))
+            (setq def-texts (psp-block-def-texts (car bn)))
+            (foreach it def-texts
+              (if (< (length txts) 200) (setq txts (cons it txts)))))))))
+  (list counts ins-names txts))
+
 ;; ---------------------------------------------------------------------------
 ;; Команда: ЭКССПДСДИАГ / SPDSDIAG
 ;; ---------------------------------------------------------------------------
 
 (defun c:ЭКССПДСДИАГ ( / ss n i ent obj hnd doc ms e nm counts key
-                          fmt sheet total bb row f strs cands txts txtc)
+                          fmt sheet total bb row f strs cands txts txtc
+                          edd dictstr dictc wr alltext)
   (princ "\nСПДС-диагностика. Выберите объекты форматов (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -661,8 +797,8 @@
      ;; Дамп первого объекта: командная строка + файл журнала
      (setq ent (ssname ss 0)
            obj (vlax-ename->vla-object ent))
-     (princ "\n--- Свойства первого объекта (vlax-dump-object): ---")
-     (vl-catch-all-apply 'vlax-dump-object (list obj))
+     (princ "\n--- Свойства и методы первого объекта (vlax-dump-object T): ---")
+     (vl-catch-all-apply 'vlax-dump-object (list obj T))
      ;; Универсальный экстрактор данных примитива
      (setq nm (psp-get obj 'ObjectName)
            strs (vl-catch-all-apply 'psp-spds-strings
@@ -687,6 +823,31 @@
      (foreach s strs
        (if (< i 40) (princ (strcat "\n  > " s)))
        (setq i (1+ i)))
+     ;; Словарь расширения: глубокий обход (группа 360 entget)
+     (setq edd (vl-catch-all-apply 'entget (list ent '("*")))
+           dictstr nil dictc nil)
+     (if (and (not (vl-catch-all-error-p edd)) (assoc 360 edd))
+       (progn
+         (princ "\n--- Словарь расширения (группа 360): ---")
+         (setq dictstr (vl-catch-all-apply 'psp-dict-walk
+                          (list (handent (cdr (assoc 360 edd))) "" 0)))
+         (if (vl-catch-all-error-p dictstr)
+           (progn
+             (princ "\n  ОШИБКА обхода: ")
+             (princ (vl-catch-all-error-message dictstr))
+             (setq dictstr nil))
+           (progn
+             (setq dictc (psp-spds-candidates dictstr))
+             (princ (strcat "\nСтрок из словаря: "
+                            (itoa (length dictstr))))
+             (princ (strcat "\nКандидаты формата в словаре: "
+                            (if dictc (psp-join ", " dictc)
+                              "не найдены")))
+             (setq i 0)
+             (foreach s dictstr
+               (if (< i 40) (princ (strcat "\n  D> " s)))
+               (setq i (1+ i)))))))
+       (princ "\nСловаря расширения в entget нет (группы 360)."))
      ;; План Б: тексты штампа в области рамки
      (setq txts nil txtc nil)
      (if bb
@@ -711,6 +872,43 @@
              (princ (strcat "\nКандидаты формата в текстах: "
                             (if txtc (psp-join ", " txtc)
                               "не найдены")))))))
+     ;; Расширенный отчёт по области: все типы, блоки, атрибуты
+     (setq wr nil)
+     (if bb
+       (progn
+         (setq wr (vl-catch-all-apply 'psp-window-report
+                      (list (list (car bb) (cadr bb))
+                            (list (caddr bb) (cadddr bb)))))
+         (if (vl-catch-all-error-p wr)
+           (progn
+             (princ "\nОтчёт по окну: ОШИБКА — ")
+             (princ (vl-catch-all-error-message wr))
+             (setq wr nil))
+           (progn
+             (princ (strcat "\n--- Объекты в окне по типам (всего "
+                            (itoa (apply '+
+                                    (mapcar 'cdr (car wr)))) "): ---")
+             (foreach key (car wr)
+               (princ (strcat "\n  " (psp-pad-right (car key) 24)
+                              " | " (itoa (cdr key)))))
+             (princ "\n--- Блоки (имя | количество): ---")
+             (foreach key (cadr wr)
+               (princ (strcat "\n  " (psp-pad-right (car key) 24)
+                              " | " (itoa (cdr key)))))
+             (setq alltext (append (if txts txts nil)
+                                   (nth 2 wr)))
+             (princ (strcat "\nТекстов с учётом атрибутов и блоков: "
+                            (itoa (length alltext))))
+             (setq txtc (psp-spds-candidates alltext))
+             (princ (strcat "\nКандидаты формата (все источники): "
+                            (if txtc (psp-join ", " txtc)
+                              "не найдены")))
+             (if (null alltext)
+               (princ
+                 "\nЕсли штамп видим, но текстов 0: проверьте, что все")
+               (princ "\n  слои разморожены и включены — ssget не видит")
+               (princ "\n  примитивы на выключенных/замороженных слоях."))))
+         (princ)))
      ;; Полный журнал
      (setq f (open (strcat (psp-output-dir) "\\spds_diag.txt") "a"))
      (if f
@@ -720,13 +918,25 @@
                              (if (and nm (not (vl-catch-all-error-p nm)))
                                nm "-")) f)
          (write-line (strcat "candidates: " (psp-join ", " cands)) f)
+         (foreach s dictstr (write-line (strcat "DICT: " s)) f)
          (write-line (strcat "texts-in-window: "
                              (if txts (itoa (length txts)) "-")) f)
          (write-line (strcat "candidates-from-texts: "
                              (if txtc (psp-join ", " txtc) "-")) f)
-         (write-line (vl-prin1-to-string (entget ent '("*"))) f)
+         (if wr
+           (progn
+             (foreach key (car wr)
+               (write-line (strcat "TYPE: " (car key) " | "
+                                   (itoa (cdr key))) f))
+             (foreach key (cadr wr)
+               (write-line (strcat "BLOCK: " (car key) " | "
+                                   (itoa (cdr key))) f))))
+         (write-line (vl-prin1-to-string edd) f)
          (foreach s strs (write-line (strcat "STR: " s)) f)
          (foreach s txts (write-line (strcat "TXT: " s)) f)
+         (if wr
+           (foreach s (nth 2 wr)
+             (write-line (strcat "BTXT: " (nth 2 s)) f)))
          (close f)
          (princ (strcat "\nПолные данные дописаны: "
                         (psp-output-dir) "\\spds_diag.txt")))
