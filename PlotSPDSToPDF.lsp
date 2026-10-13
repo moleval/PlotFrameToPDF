@@ -49,7 +49,10 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 51
+;;; Маркер редакции для RELOAD: (ред. 52
+;;; v0.52: DCL-диалога: у тайла spacer нельзя переопределять width
+;;;        (фиксированный размер) — «неверный атрибут. Символ: spacer»,
+;;;        строка 9. Заменено на безатрибутный spacer.
 ;;; v0.51: ИСПРАВЛЕНА «синтаксическая ошибка» при загрузке: в хвосте
 ;;;        диалога настроек 0.50 закрывающая скобка встала так, что
 ;;;        (princ) попал в форму (if ...) четвёртым аргументом; баланс
@@ -292,7 +295,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.51")
+(setq *psp-ver* "0.52")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1394,10 +1397,10 @@
   (write-line "  : edit_box { key = \"delay\"; label = \"Задержка открытия, с:\"; edit_width = 5; }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"Открывать результат (склейку / одиночные)\"; }" f)
   (write-line "  : toggle { key = \"dels\"; label = \"Удалять одиночные листы после склейки\"; }" f)
-  (write-line "  : row { spacer { width = 1; }" f)
+  (write-line "  : row { spacer;" f)
   (write-line "    : button { key = \"ok\"; label = \"Применить\"; is_default = true; }" f)
   (write-line "    : button { key = \"cancel\"; label = \"Отмена\"; is_cancel = true; }" f)
-  (write-line "    spacer { width = 1; } } }" f)
+  (write-line "    spacer; } }" f)
   (close f)
   (setq d (load_dialog dcl))
   (if (null (new_dialog "psp_set" d))
