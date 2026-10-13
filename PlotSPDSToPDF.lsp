@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 25
+;;; Маркер редакции для RELOAD: (ред. 26
+;;; v0.26: печать 4/4 прошла, но склейка упала «stringp T» — источник
+;;;        статически не найден. Склейка сделана пуленепробиваемой:
+;;;        все части команды через psp-s->str (не-строка НЕ роняет
+;;;        strcat, а видна в печатаемой команде), вызов под
+;;;        vl-catch-all с печатью ошибки, gs и целевой путь печатаются
+;;;        до склейки — следующий лог покажет всё.
 ;;; v0.25: ТРАНСКРИПТ 0.24 РАСКРЫЛ ПРИЧИНУ: подсказке «Введите имя
 ;;;        файла» уходил ответ «_As» — в общей ленте был ЛИШНИЙ ответ
 ;;;        «_N» («не масштабировать веса»): в этой сборке AutoCAD такого
@@ -145,7 +151,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.25")
+(setq *psp-ver* "0.26")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -734,12 +740,20 @@
 
 ;; Склейка PDF-файлов Ghostscript'ом. Асинхронно (startapp), поэтому
 ;; вызывающий ждёт появления целевого файла.
-(defun psp-merge-pdfs (gs src-lst trg / cmd k)
-  (setq cmd (strcat "\"" gs "\""
-                    " -dBATCH -dNOPAUSE -dSAFER -dQUIET"
-                    " -sDEVICE=pdfwrite"
-                    " -sOutputFile=\"" trg "\""
-                    " \"" (psp-join "\" " src-lst) "\"\""))
+;; Безопасная строка: STR как есть, nil -> "", прочее -> princ-to-string
+;; (T и прочие не-строки не должны ронять strcat — показываем себя)
+(defun psp-s->str (x)
+  (cond
+    ((= (type x) 'STR) x)
+    ((null x) "")
+    (t (vl-princ-to-string x))))
+
+(defun psp-merge-pdfs (gs src-lst trg / cmd k s)
+  (setq cmd (strcat "\"" (psp-s->str gs) "\""
+                    " -dBATCH -dNOPAUSE -dSAFER -dQUIET -sDEVICE=pdfwrite"
+                    " -sOutputFile=\"" (psp-s->str trg) "\""))
+  (foreach s src-lst
+    (setq cmd (strcat cmd " \"" (psp-s->str s) "\"")))
   (startapp cmd)
   (setq k 0)
   (while (and (not (findfile trg)) (< k 40))
@@ -983,10 +997,19 @@
                                      (vl-filename-base dir) ".pdf"))
                 (princ (strcat "\nПСП: склеиваю " (itoa (length pdfs))
                                " листов (Ghostscript)..."))
-                (if (psp-merge-pdfs gs pdfs merged)
-                  (princ (strcat "\nСобрано в один PDF: " merged))
-                  (princ (strcat "\nПСП: файл не появился за 20 с — "
-                                 "запустите склейку вручную: " gs))))
+                (princ (strcat "\n  gs=" (psp-s->str gs)))
+                (princ (strcat "\n  out=" (psp-s->str merged)))
+                (setq res (vl-catch-all-apply
+                            'psp-merge-pdfs (list gs pdfs merged)))
+                (cond
+                  ((vl-catch-all-error-p res)
+                   (princ "\nПСП: склейка ОШИБКА: ")
+                   (princ (vl-catch-all-error-message res)))
+                  ((null res)
+                   (princ (strcat "\nПСП: файл не появился за 20 с — "
+                                  "проверьте gs вручную: " (psp-s->str gs))))
+                  (t
+                   (princ (strcat "\nСобрано в один PDF: " (psp-s->str res))))))
               (princ "\nПСП: сборка в один PDF пропущена.")))
           (if (and (> (length ok-list) 1) (null gs))
             (princ "\nПСП: Ghostscript не найден — один PDF не собираю.\nПСП: установите GS или положите gswin64c.exe в <чертех>\\gs\\.")))
