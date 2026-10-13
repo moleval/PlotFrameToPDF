@@ -49,7 +49,14 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 9
+;;; Маркер редакции для RELOAD: (ред. 11
+;;; v0.11: СВОЙСТВА СПДС НАЙДЕНЫ: в entget объекта парами (301 "ключ")
+;;;        (300 "значение"): Format, Sheet, SheetCount, Designation,
+;;;        Orientation, Multiplicity (журнал 0.10). Новый psp-spds-fields;
+;;;        формат/лист/листов в ЭКССПДСВПДФ и диагностике читаются из
+;;;        entget (COM-свойства остались запасным каналом). Экстрактор
+;;;        собирает пары 301/300 (строки вида "Format: A4"). Кратность
+;;;        Multiplicity>1 даёт бумагу на N-1 шагов вверх (как "ФорматXN").
 ;;; v0.9: ПРИЧИНА СБОЕВ ЗАГРУЗКИ НАЙДЕНА. (load) в AutoCAD не читает
 ;;;        .lsp дальше ~36 Кбайт (36864 = 0x9000): v0.1-v0.4 (до 36433
 ;;;        байт) грузились, все версии с v0.5 (45317+) падали с «синтак-
@@ -64,7 +71,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.9")
+(setq *psp-ver* "0.11")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -342,7 +349,7 @@
 
 ;; Строки объекта СПДС: entget (группы 1, 3 и бинарные 310-312),
 ;; XRecord'ы расширения словаря, XData. Каждый шаг защищён.
-(defun psp-spds-strings (obj ent / ed item runs s res dict it nm
+(defun psp-spds-strings (obj ent / ed item runs s res dict it nm k301
                              codes vals cl vl i v)
   (setq res nil)
   ;; 1) entget: тексты, бинарные данные, XData (группы 1000+;
@@ -351,6 +358,15 @@
   (if (and (not (vl-catch-all-error-p ed)) ed)
     (foreach item ed
       (cond
+        ((and (= (car item) 301) (= (type (cdr item)) 'STR))
+         (setq k301 (cdr item)))
+        ((and k301 (member (car item) '(300 40 90 290)))
+         (setq v (cdr item)
+               v (cond ((= (type v) 'STR) v)
+                       ((= (type v) 'INT) (itoa v))
+                       ((= (type v) 'REAL) (rtos v 2 2))))
+         (setq res (cons (strcat k301 ": " v) res)
+               k301 nil))
         ((and (member (car item) '(1 3))
               (= (type (cdr item)) 'STR)
               (> (strlen (cdr item)) 1))
@@ -468,10 +484,38 @@
   (reverse res))
 
 ;; Свойства строки диагностики: (формат-имя лист листов габариты).
-(defun psp-spds-row (obj)
-  (list (psp-spds-prop-ex obj *psp-spds-props-format*)
-        (psp-spds-prop-ex obj *psp-spds-props-sheet*)
-        (psp-spds-prop-ex obj *psp-spds-props-total*)
+;; Пары (301 "ключ") (300 "значение") в entget SPDSFORMAT: Format, Sheet,
+;; SheetCount, Designation, Orientation, Multiplicity, Name, Info и т.д.
+(defun psp-spds-fields (ent / ed item key val res)
+  (setq ed (entget ent) res nil key nil)
+  (foreach item ed
+    (cond
+      ((and (= (car item) 301) (= (type (cdr item)) 'STR))
+       (setq key (cdr item)))
+      ((and key (member (car item) '(300 40 90 290)))
+       (setq val (cdr item)
+             val (cond ((= (type val) 'STR) val)
+                       ((= (type val) 'INT) (itoa val))
+                       ((= (type val) 'REAL) (rtos val 2 2))))
+       (setq res (cons (cons key val) res) key nil))))
+  (reverse res))
+
+(defun psp-field (fields name / p)
+  (setq p (assoc name fields))
+  (if p (cdr p)))
+
+(defun psp-spds-row (obj / ent f)
+  (setq ent (vlax-vla-object->ename obj)
+        f (psp-spds-fields ent))
+  (list (if (psp-field f "Format")
+          (list (psp-field f "Format") "entget301")
+          (psp-spds-prop-ex obj *psp-spds-props-format*))
+        (if (psp-field f "Sheet")
+          (list (psp-field f "Sheet") "entget301")
+          (psp-spds-prop-ex obj *psp-spds-props-sheet*))
+        (if (psp-field f "SheetCount")
+          (list (psp-field f "SheetCount") "entget301")
+          (psp-spds-prop-ex obj *psp-spds-props-total*))
         (psp-spds-bbox obj)))
 
 ;; Габариты объекта в WCS: (llx lly urx ury) или nil.
@@ -596,7 +640,7 @@
 
 (defun c:ЭКССПДСВПДФ ( / ss n i ent obj it items fmt sheet sheet-i
                           bb used rec media rot-str ctb dir stamp fname
-                          nm-n w h x1 y1 x2 y2 ok-list skip j row
+                          nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult
                           old-bg old-paper old-trans has-trans res)
   (princ "\nЭкспорт форматов СПДС в PDF. Выберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
@@ -608,10 +652,17 @@
      (while (< i n)
        (setq ent (ssname ss i)
              obj (vlax-ename->vla-object ent)
-             fmt (psp-spds-prop obj *psp-spds-props-format*)
-             sheet (psp-spds-prop obj *psp-spds-props-sheet*)
+             flds (psp-spds-fields ent)
+             fmt (or (psp-field flds "Format")
+                     (psp-spds-prop obj *psp-spds-props-format*))
+             sheet (or (psp-field flds "Sheet")
+                       (psp-spds-prop obj *psp-spds-props-sheet*))
              sheet-i (atoi (if sheet sheet "0"))
              bb (psp-spds-bbox obj))
+       ;; кратность: A4 + Multiplicity 3 -> "A4X3" (бумага на 3 шага вверх)
+       (setq mult (atoi (or (psp-field flds "Multiplicity") "1")))
+       (if (and fmt (> mult 1))
+         (setq fmt (strcat fmt "X" (itoa mult))))
        (if bb
          (setq items
                (cons (list ent obj fmt
