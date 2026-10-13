@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 34
+;;; Маркер редакции для RELOAD: (ред. 35
+;;; v0.35: по запросу пользователя: дробные листы (15, 15.1, 15.2)
+;;;        идут по порядку номеров. Ранее atoi("15.1")=15 — все имели
+;;;        один ключ и сортировались по вертикали. Номер парсится как
+;;;        вещественный (psp-sheet-num), имена файлов честные:
+;;;        L15, L15.1, L15.2 (psp-sheet-name), в таблице без ".0"
+;;;        (psp-num-str). Строка номера хранится в позиции 8 записи.
 ;;; v0.34: 18/18 ЛИСТОВ В РЕАЛЬНОМ АЛЬБОМЕ (A4->A3 и A3->A2, обе
 ;;;        ориентации, дубликаты L15_2/_3) — печать стабильна. Склейка
 ;;;        во ВТОРОМ чертеже упала «no function definition:
@@ -198,7 +204,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.34")
+(setq *psp-ver* "0.35")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -864,6 +870,34 @@
 (defun psp-pad2 (n)
   (if (< n 10) (strcat "0" (itoa n)) (itoa n)))
 
+;; Номер листа как число: "15" -> 15.0, "15.1" -> 15.1 (запятая тоже
+;; понимается); nil/пустое -> 0 (без номера). Дробные листы (15, 15.1,
+;; 15.2) сортируются по возрастанию: 15 < 15.1 < 15.2.
+(defun psp-sheet-num (s)
+  (if (= (type s) 'STR)
+    (atof (vl-string-translate "," "." s))
+    0.0))
+
+;; Имя файла из строки номера СПДС: "15" -> "L15" (целая часть
+;; дополняется до двух знаков: "9" -> "L09"), "15.1" -> "L15.1",
+;; запятая заменяется точкой.
+(defun psp-sheet-name (s / norm k)
+  (if (= (type s) 'STR)
+    (progn
+      (setq norm (vl-string-trim " " (vl-string-translate "," "." s)))
+      (if (= norm "")
+        nil
+        (if (setq k (vl-string-search "." norm))
+          (strcat "L" (substr norm 1 k) (substr norm (1+ k)))
+          (strcat "L" (psp-pad2 (atoi norm))))))
+    nil))
+
+;; Число для отчёта: целое вещественное печатается без ".0"
+(defun psp-num-str (n)
+  (if (and (= (type n) 'REAL) (= n (float (fix n))))
+    (itoa (fix n))
+    (vl-princ-to-string n)))
+
 ;; Уникальное имя: s01; повторы -> s01_2, s01_3 ...
 (defun psp-spds-uniq (base used / nm k)
   (setq nm base k 1)
@@ -923,7 +957,7 @@
        (setq sheet (psp-field flds "Sheet"))
        (if (null sheet)
          (setq sheet (psp-spds-prop obj *psp-spds-props-sheet*)))
-       (setq sheet-i (atoi (if sheet sheet "0")))
+       (setq sheet-i (psp-sheet-num sheet))
        (setq bb (psp-spds-bbox obj))
        ;; кратность: A4 + Multiplicity 3 -> "A4X3" (бумага на 3 шага вверх)
        (setq multv (psp-field flds "Multiplicity"))
@@ -934,8 +968,9 @@
        (if bb
          (setq items
                (cons (list ent obj fmt
-                           (if (> sheet-i 0) sheet-i 9999)
-                           (car bb) (cadr bb) (caddr bb) (cadddr bb))
+                           (if (> sheet-i 0) sheet-i 9999.0)
+                           (car bb) (cadr bb) (caddr bb) (cadddr bb)
+                           sheet)
                      items))
          (setq skip (cons (cdr (assoc 5 (entget ent))) skip)))
        (setq i (1+ i)))
@@ -992,10 +1027,9 @@
                 media (if (>= w h) (nth 4 rec) (nth 3 rec))
                 rot-str (if (>= w h) "_L" "_P")
                 nm-n (psp-spds-uniq
-                       (strcat "L" (psp-pad2
-                                     (if (< (nth 3 it) 9999)
-                                       (nth 3 it)
-                                       (1+ j))))
+                       (if (nth 8 it)
+                         (psp-sheet-name (nth 8 it))
+                         (strcat "L" (psp-pad2 (1+ j))))
                        used)
                 fname (strcat dir "\\" (car nm-n))
                 used (cadr nm-n))
@@ -1069,7 +1103,7 @@
                          " | "
                          (psp-pad-right (if (nth 1 row) (nth 1 row) "-") 11)
                          " | "
-                         (if (< (nth 2 row) 9999) (itoa (nth 2 row)) "-")
+                         (if (< (nth 2 row) 9999) (psp-num-str (nth 2 row)) "-")
                          "    | "
                          (psp-pad-right (nth 3 row) 13)
                          " |")))
