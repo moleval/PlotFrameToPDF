@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 31
+;;; Маркер редакции для RELOAD: (ред. 32
+;;; v0.32: лог 0.31 показал: сработала ветка «рядом с чертежом» и
+;;;        отдала ВЫДУМАННЫЙ путь (после 0.31 пути доверяются без
+;;;        проверки) — GS_DLL из реестра даже не читался. Приоритет
+;;;        изменён: реестр ПЕРВЫМ (там фактический каталог установки),
+;;;        выдуманные пути рядом с чертежом — последними; логи только
+;;;        от реально отработавших веток.
 ;;; v0.31: лог 0.30 добил: «GS_DLL -> type=STR», затем stringp T —
 ;;;        open тоже подменён (возвращает T для существующего файла),
 ;;;        а (close T) вне catch-all поднимал ошибку. Проверки файлов
@@ -180,7 +186,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.31")
+(setq *psp-ver* "0.32")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -751,29 +757,18 @@
 ;; Поиск Ghostscript: переменная *psp-gs* -> gs рядом с чертежом ->
 ;; реестр (GS_DLL/GS_LIB) -> Program Files. Каждый этап печатает
 ;; результат (диагностика «gs=T»); наружу только строка или nil.
-(defun psp-find-gs ( / try res brand vers vk v pd sub exe)
-  ;; ВАЖНО: на машине с СПДС хуками findfile, vl-filename-directory
-  ;; и open для существующих файлов возвращают T, а не путь/описатель
-  ;; (close от такого «описателя» и поднимал «stringp T»). Проверок
-  ;; файлов больше нет: путь доверяется как есть; существование
-  ;; подтвердит сама склейка (появился выходной PDF — путь верный).
+;; Поиск Ghostscript. Приоритет: явный путь (ПСПГС) -> реестр
+;; (GS_DLL/GS_LIB = фактический каталог установки) -> Program Files ->
+;; пути рядом с чертежом (на веру, последними). Проверок файлов нет
+;; (на машине с СПДС findfile/open возвращают T): правильность пути
+;; подтверждает сама склейка.
+(defun psp-find-gs ( / try res brand vk v pd sub exe p)
   (defun try (p)
     (if (= (type p) 'STR) p nil))
-  ;; 1) задан явно в *psp-gs*
+  ;; 1) явно задан командой ПСПГС (запоминается в реестре настроек)
   (setq res (try *psp-gs*))
-  (princ "\n  GS[1] явно задан: нет")
-  (if res (princ (strcat "\n  GS[1] = " res)))
-  ;; 2) gs рядом с чертежом
-  (if (null res)
-    (foreach p (list (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin64c.exe")
-                     (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin32c.exe")
-                     (strcat (getvar "DWGPREFIX") "gs\\gswin64c.exe")
-                     (strcat (getvar "DWGPREFIX") "gs\\gswin32c.exe")
-                     (strcat (getvar "DWGPREFIX") "gswin64c.exe")
-                     (strcat (getvar "DWGPREFIX") "gswin32c.exe"))
-      (if (null res) (setq res (try p)))))
-  (if res (princ (strcat "\n  GS[2] рядом с чертежом: " res)))
-  ;; 3) реестр установленных версий (GS_DLL, в 10.x и GS_LIB)
+  (if res (princ (strcat "\n  GS[1] задан ПСПГС: " res)))
+  ;; 2) реестр: каталог установки из GS_DLL/GS_LIB
   (if (null res)
     (foreach brand (list "GPL Ghostscript" "AFPL Ghostscript" "GNU Ghostscript")
       (if (null res)
@@ -787,16 +782,17 @@
                             (strcat "HKEY_LOCAL_MACHINE\\SOFTWARE\\"
                                     brand "\\" (vl-princ-to-string vk))
                             vn))
-                  (princ (strcat "\n  GS[3] " brand "\\" (psp-s->str vk)
-                                 "\\" vn " -> type="
-                                 (if v (vl-princ-to-string (type v)) "nil")))
                   (if (= (type v) 'STR)
-                    (setq res (or (try (strcat (psp-file-dir v)
-                                               "\\gswin64c.exe"))
-                                  (try (strcat (psp-file-dir v)
-                                               "\\gswin32c.exe")))))))))))))
-  (if res (princ (strcat "\n  GS[3] реестр: " res)))
-  ;; 4) Program Files: gs\\gs<версия>\\bin
+                    (progn
+                      (setq res (or (try (strcat (psp-file-dir v)
+                                                 "\\gswin64c.exe"))
+                                    (try (strcat (psp-file-dir v)
+                                                 "\\gswin32c.exe"))))
+                      (if res
+                        (princ (strcat "\n  GS[2] реестр "
+                                       (vl-princ-to-string vk) "\\" vn
+                                       ": " res)))))))))))))
+  ;; 3) Program Files: gs\\gs<версия>\\bin
   (if (null res)
     (foreach pd (list "C:\\Program Files\\gs" "C:\\Program Files (x86)\\gs")
       (if (vl-file-directory-p pd)
@@ -804,8 +800,21 @@
           (if (= (type sub) 'STR)
             (foreach exe (list "gswin64c.exe" "gswin32c.exe")
               (if (null res)
-                (setq res (try (strcat pd "\\" sub "\\bin\\" exe))))))))))
-  (if res (princ (strcat "\n  GS[4] Program Files: " res)))
+                (progn
+                  (setq res (try (strcat pd "\\" sub "\\bin\\" exe)))
+                  (if res
+                    (princ (strcat "\n  GS[3] Program Files: " res)))))))))))
+  ;; 4) рядом с чертежом (пути «на веру»: существуют, только если
+  ;;    GS туда действительно клали)
+  (if (null res)
+    (foreach p (list (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin64c.exe")
+                     (strcat (getvar "DWGPREFIX") "gs\\bin\\gswin32c.exe")
+                     (strcat (getvar "DWGPREFIX") "gs\\gswin64c.exe")
+                     (strcat (getvar "DWGPREFIX") "gs\\gswin32c.exe")
+                     (strcat (getvar "DWGPREFIX") "gswin64c.exe")
+                     (strcat (getvar "DWGPREFIX") "gswin32c.exe"))
+      (if (null res) (setq res (try p)))))
+  (if res (princ (strcat "\n  GS[4] рядом с чертежом: " res)))
   ;; страховка: наружу только строка или nil
   (if (= (type res) 'STR) res nil))
 
