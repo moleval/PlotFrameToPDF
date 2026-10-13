@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 11
+;;; Маркер редакции для RELOAD: (ред. 12
+;;; v0.12: по логу первого прогона ЭКССПДСВПДФ: необнаруженная ошибка
+;;;        «неверный тип аргумента: stringp T» — добавлена поэтапная
+;;;        трассировка печати (объектов/сортировка/папка/каждый лист),
+;;;        psp-page-preset обёрнут в vl-catch-all-apply, psp-output-dir
+;;;        переживает пустой TEMP. Ошибка диага (тройки вместо строк)
+;;;        исправлена в PlotSPDSDiag 0.12.
 ;;; v0.11: СВОЙСТВА СПДС НАЙДЕНЫ: в entget объекта парами (301 "ключ")
 ;;;        (300 "значение"): Format, Sheet, SheetCount, Designation,
 ;;;        Orientation, Multiplicity (журнал 0.10). Новый psp-spds-fields;
@@ -71,7 +77,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.11")
+(setq *psp-ver* "0.12")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -153,13 +159,16 @@
   (strcat (getenv "TEMP") "\\" *psp-subdir*))
 
 (defun psp-output-dir ( / d)
-  (setq d (if *psp-output-dir* *psp-output-dir* (psp-default-dir)))
-  (if (not (vl-file-directory-p d)) (vl-mkdir d))
-  d)
+  (if (null *psp-output-dir*)
+    (progn
+      (setq d (getenv "TEMP"))
+      (if (null d) (setq d (getvar "TEMP")))
+      (if (null d) (setq d "C:"))
+      (setq d (strcat d "\\" *psp-subdir*))
+      (vl-mkdir d)
+      (setq *psp-output-dir* d)))
+  *psp-output-dir*)
 
-;; Сброс зависшего состояния командной строки: только Esc, пока
-;; CMDACTIVE > 0. Пустые Enter не отправляются (Enter на пустой строке
-;; повторяет последнюю команду — вложенный самозапуск).
 (defun psp-clear-stuck ( / doc i)
   (setq doc (vl-catch-all-apply 'vla-get-ActiveDocument
                                 (list (vlax-get-acad-object))))
@@ -649,6 +658,7 @@
     (t
      ;; Сбор сведений
      (setq n (sslength ss) i 0 items nil skip nil)
+     (princ (strcat "\nПСП: выбрано объектов: " (itoa n)))
      (while (< i n)
        (setq ent (ssname ss i)
              obj (vlax-ename->vla-object ent)
@@ -672,6 +682,7 @@
          (setq skip (cons (cdr (assoc 5 (entget ent))) skip)))
        (setq i (1+ i)))
      (setq items (psp-spds-sorted (reverse items)))
+     (princ (strcat "\nПСП: к печати после сортировки: " (itoa (length items))))
      (cond
        ((null items)
         (princ "\nУ выбранных объектов нет габаритов — печатать нечего.")
@@ -683,6 +694,7 @@
                           "\\SPDS_" (substr stamp 1 8)
                           "_" (substr stamp 10 6)))
         (if (not (vl-file-directory-p dir)) (vl-mkdir dir))
+        (princ (strcat "\nПСП: папка сборки: " dir))
         (setq ctb (if *psp-color-mode* *psp-ctb-color* *psp-ctb-mono*))
         ;; Системные переменные: сохранить -> изменить -> восстановить
         (setq has-trans
@@ -715,9 +727,14 @@
                        used)
                 fname (strcat dir "\\" (car nm-n))
                 used (cadr nm-n))
+          (princ (strcat "\n  ПСП: " (car nm-n) " (" media ")"))
           ;; Предустановка формата листа (без лишних вопросов)
           (setq *psp-stage* "предустановка листа")
-          (psp-page-preset media)
+          (setq res (vl-catch-all-apply 'psp-page-preset (list media)))
+          (if (vl-catch-all-error-p res)
+            (progn
+              (princ "\n  ПСП: предустановка ОШИБКА: ")
+              (princ (vl-catch-all-error-message res))))
           ;; Окно печати задаётся в UCS
           (setq x1 (car (trans (list (nth 4 it) (nth 5 it)) 0 1))
                 y1 (cadr (trans (list (nth 4 it) (nth 5 it)) 0 1))
@@ -728,6 +745,9 @@
                       (list (strcat fname ".pdf") media rot-str ctb
                             x1 y1 x2 y2)))
           (psp-page-restore)
+          (if (vl-catch-all-error-p res)
+            (princ "  ошибка печати, см. ниже")
+            (princ "  отправлено на печать."))
           (if (vl-catch-all-error-p res)
             (progn
               (princ (strcat "\nПСП: ОШИБКА [этап: " *psp-stage*
