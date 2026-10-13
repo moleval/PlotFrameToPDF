@@ -49,7 +49,14 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 28
+;;; Маркер редакции для RELOAD: (ред. 29
+;;; v0.29: лог 0.28 добил: «GS_DLL -> type=STR» напечатан, а следующий
+;;;        strcat упал — vl-filename-directory ТОЖЕ возвращает T (хуки
+;;;        СПДС затрагивают и его). Модуль отвязан от vl-filename-*:
+;;;        каталог/имя разбираются вручную (psp-file-dir/psp-file-base
+;;;        на substr), существование файла — open/close (findfile
+;;;        остался только индикатором). Поиск GS обёрнут в catch-all
+;;;        с печатью ошибки; команда ПСПГС — ручной путь.
 ;;; v0.28: НАЙДЕНА ОКОНЧАТЕЛЬНАЯ ПРИЧИНА ВСЕХ «stringp T»: findfile
 ;;;        у пользователя возвращает T вместо пути существующего файла
 ;;;        (подозрение на вмешательство СПДС GraphiCS). Улики: «TT» в
@@ -164,7 +171,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.28")
+(setq *psp-ver* "0.29")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -711,16 +718,42 @@
 ;; Поиск Ghostscript: переменная *psp-gs* -> портативный gs рядом
 ;; с чертежом -> реестр -> Program Files. Возвращает путь к консольному
 ;; gswin64c.exe/gswin32c.exe или nil.
+;; Каталог файла: всё до последнего "\\" (вручную, без vl-filename-*:
+;; на машине с СПДС хуками vl-filename-directory возвращает T)
+(defun psp-file-dir (path / i last)
+  (setq i 1 last 0)
+  (if (= (type path) 'STR)
+    (progn
+      (while (<= i (strlen path))
+        (if (= (substr path i 1) "\\") (setq last i))
+        (setq i (1+ i)))
+      (if (> last 0) (substr path 1 (1- last)) ""))))
+
+;; Имя файла без каталога: всё после последнего "\\"
+(defun psp-file-base (path / i last)
+  (setq i 1 last 0)
+  (if (= (type path) 'STR)
+    (progn
+      (while (<= i (strlen path))
+        (if (= (substr path i 1) "\\") (setq last i))
+        (setq i (1+ i)))
+      (if (> last 0) (substr path (1+ last)) path))))
+
 ;; Поиск Ghostscript: переменная *psp-gs* -> gs рядом с чертежом ->
 ;; реестр (GS_DLL/GS_LIB) -> Program Files. Каждый этап печатает
 ;; результат (диагностика «gs=T»); наружу только строка или nil.
 (defun psp-find-gs ( / try res brand vers vk v pd sub exe)
-  ;; ВАЖНО: у пользователя findfile для СУЩЕСТВУЮЩЕГО файла возвращает
-  ;; T, а не путь (подозрение на вмешательство СПДС GraphiCS) — поэтому
-  ;; findfile используется только как признак существования, наружу
-  ;; отдаётся собственный путь p.
-  (defun try (p)
-    (if (and (= (type p) 'STR) (findfile p)) p nil))
+  ;; ВАЖНО: у пользователя findfile И vl-filename-directory для
+  ;; существующих файлов возвращают T, а не путь (хуки СПДС GraphiCS).
+  ;; Существование проверяем через open/close (журнал diag так писал),
+  ;; наружу отдаётся собственный путь p.
+  (defun try (p / f)
+    (if (= (type p) 'STR)
+      (progn
+        (setq f (vl-catch-all-apply 'open (list p "r")))
+        (if (and f (not (vl-catch-all-error-p f)))
+          (progn (close f) p)
+          nil))))
   ;; 1) задан явно в *psp-gs*
   (setq res (try *psp-gs*))
   (princ "\n  GS[1] явно задан: нет")
@@ -753,9 +786,9 @@
                                  "\\" vn " -> type="
                                  (if v (vl-princ-to-string (type v)) "nil")))
                   (if (= (type v) 'STR)
-                    (setq res (or (try (strcat (vl-filename-directory v)
+                    (setq res (or (try (strcat (psp-file-dir v)
                                                "\\gswin64c.exe"))
-                                  (try (strcat (vl-filename-directory v)
+                                  (try (strcat (psp-file-dir v)
                                                "\\gswin32c.exe")))))))))))))
   (if res (princ (strcat "\n  GS[3] реестр: " res)))
   ;; 4) Program Files: gs\\gs<версия>\\bin
@@ -1007,7 +1040,14 @@
                        "; без габаритов/ошибок: " (itoa (length skip))))
         ;; Сборка в один многостраничный PDF (если есть Ghostscript
         ;; и напечатано больше одного листа)
-        (if (and (> (length ok-list) 1) (setq gs (psp-find-gs)))
+        (setq gs (if (> (length ok-list) 1)
+                   (vl-catch-all-apply 'psp-find-gs (list nil))))
+        (if (vl-catch-all-error-p gs)
+          (progn
+            (princ "\nПСП: поиск Ghostscript ОШИБКА: ")
+            (princ (vl-catch-all-error-message gs))
+            (setq gs nil)))
+        (if (and (> (length ok-list) 1) gs)
           (progn
             (initget "Да Нет _ Yes No")
             (setq ans (getkword "\nСобрать все листы в один PDF? [Да/Нет] <Да>: "))
@@ -1017,7 +1057,7 @@
               (progn
                 (setq pdfs (reverse merge-list)
                       merged (strcat dir "\\"
-                                     (vl-filename-base dir) ".pdf"))
+                                     (psp-file-base dir) ".pdf"))
                 (princ (strcat "\nПСП: склеиваю " (itoa (length pdfs))
                                " листов (Ghostscript)..."))
                 (princ (strcat "\n  gs=" (psp-s->str gs)))
@@ -1034,8 +1074,8 @@
                   (t
                    (princ (strcat "\nСобрано в один PDF: " (psp-s->str res))))))
               (princ "\nПСП: сборка в один PDF пропущена.")))
-          (if (and (> (length ok-list) 1) (null gs))
-            (princ "\nПСП: Ghostscript не найден — один PDF не собираю.\nПСП: установите GS или положите gswin64c.exe в <чертех>\\gs\\.")))
+          (if (> (length ok-list) 1)
+            (princ "\nПСП: Ghostscript не найден — один PDF не собираю.\nПСП: установите GS или задайте путь командой ПСПГС.")))
         ;; Открыть папку сборки
         (psp-sleep *psp-open-delay*)
         (psp-open dir)
