@@ -11,7 +11,12 @@
 ;;; v0.9: выделен из PlotSPDSToPDF.lsp: (load) в AutoCAD не читает .lsp
 ;;;        дальше ~36 Кбайт (36864 = 0x9000), поэтому диагностика вынесена
 ;;;        в отдельный файл. Прогресс загрузки: маркеры «ПСПД: секция N/6».
-;;; Маркер редакции для RELOAD: (ред. 9
+;;; v0.10: psp-diag-window пересобран консервативно (плоская структура,
+;;;        два компактных defun, без ё/тире в строках, без (if ...) внутри
+;;;        strcat): именно на нём читатель спотыкался (ПСПД 3 печаталась,
+;;;        дальше «синтаксическая ошибка»; 19 Кб — предел 36 Кб опровергнут).
+;;;        Новая секция-маркер ПСПД 3a между двумя функциями этапа 5.
+;;; Маркер редакции для RELOAD: (ред. 10
 
 (if (null *psp-ver*)
   (princ "\nПСПД: ВНИМАНИЕ — сначала загрузите PlotSPDSToPDF.lsp!"))
@@ -370,8 +375,12 @@
   (princ))
 (princ (strcat "\nПСПД: секция 3/6 загружена")) (princ)
 ;; Этап 5: расширенный отчёт по области (типы, блоки, атрибуты)
+;; Этап 5: расширенный отчёт по области (типы, блоки, атрибуты).
+;; Пересобран консервативно: два компактных defun, плоская структура,
+;; без (if ...) внутри strcat — читатель Visual LISP спотыкался здесь.
 (defun psp-diag-window ()
-  (setq *psp-d-wr* nil *psp-d-alltext* nil)
+  (setq *psp-d-wr* nil)
+  (setq *psp-d-alltext* nil)
   (if *psp-d-bb*
     (progn
       (setq *psp-d-wr*
@@ -380,35 +389,36 @@
                     (list (caddr *psp-d-bb*) (cadddr *psp-d-bb*)))))
       (if (vl-catch-all-error-p *psp-d-wr*)
         (progn
-          (princ "\nОтчёт по окну: ОШИБКА — ")
+          (princ "\nОтчет по окну: ОШИБКА: ")
           (princ (vl-catch-all-error-message *psp-d-wr*))
           (setq *psp-d-wr* nil))
-        (progn
-          (princ (strcat "\n--- Объекты в окне по типам (всего "
-                         (itoa (psp-sum-counts (car *psp-d-wr*)))
-                         "): ---"))
-          (foreach key (car *psp-d-wr*)
-            (princ (strcat "\n  " (psp-pad-right (car key) 24)
-                           " | " (itoa (cdr key)))))
-          (princ "\n--- Блоки (имя | количество): ---")
-          (foreach key (cadr *psp-d-wr*)
-            (princ (strcat "\n  " (psp-pad-right (car key) 24)
-                           " | " (itoa (cdr key)))))
-          (setq *psp-d-alltext*
-                (append *psp-d-txts* (nth 2 *psp-d-wr*)))
-          (princ (strcat "\nТекстов с учётом атрибутов и блоков: "
-                         (itoa (length *psp-d-alltext*))))
-          (setq *psp-d-txtc*
-                (psp-spds-candidates *psp-d-alltext*))
-          (princ (strcat "\nКандидаты формата (все источники): "
-                         (if *psp-d-txtc*
-                           (psp-join ", " *psp-d-txtc*) "не найдены"))))
-          (if (null *psp-d-alltext*)
-            (progn
-              (princ
-                "\nЕсли штамп видим, но текстов 0: проверьте, что все")
-              (princ "\n  слои разморожены и включены — ssget не видит")
-              (princ "\n  примитивы на выключенных/замороженных слоях."))))))
+        (psp-diag-window-report))))
+  (princ))
+
+(princ (strcat "\nПСПД: секция 3a/6 загружена")) (princ)
+
+(defun psp-diag-window-report ( / key)
+  (princ "\n--- Объекты в окне по типам ---")
+  (foreach key (car *psp-d-wr*)
+    (princ (strcat "\n  " (psp-pad-right (car key) 24)
+                   " | " (itoa (cdr key)))))
+  (princ "\n--- Блоки (имя | количество) ---")
+  (foreach key (cadr *psp-d-wr*)
+    (princ (strcat "\n  " (psp-pad-right (car key) 24)
+                   " | " (itoa (cdr key)))))
+  (setq *psp-d-alltext* (append *psp-d-txts* (nth 2 *psp-d-wr*)))
+  (princ (strcat "\nТекстов с учетом атрибутов и блоков: "
+                 (itoa (length *psp-d-alltext*))))
+  (setq *psp-d-txtc* (psp-spds-candidates *psp-d-alltext*))
+  (princ "\nКандидаты формата (все источники): ")
+  (if *psp-d-txtc*
+    (princ (psp-join ", " *psp-d-txtc*))
+    (princ "не найдены"))
+  (if (null *psp-d-alltext*)
+    (progn
+      (princ "\nЕсли штамп видим, но текстов 0: проверьте, что все")
+      (princ "\n  слои разморожены и включены; ssget не видит")
+      (princ "\n  примитивы на выключенных или замороженных слоях.")))
   (princ))
 (princ (strcat "\nПСПД: секция 4/6 загружена")) (princ)
 ;; Этап 6: полный журнал
