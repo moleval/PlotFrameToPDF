@@ -49,7 +49,10 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 29
+;;; Маркер редакции для RELOAD: (ред. 30
+;;; v0.30: в 0.29 поиск GS не запускался вовсе — vl-catch-all-apply
+;;;        получил (list nil) как аргумент для функции без аргументов
+;;;        («слишком много аргументов»); вызов исправлен на nil.
 ;;; v0.29: лог 0.28 добил: «GS_DLL -> type=STR» напечатан, а следующий
 ;;;        strcat упал — vl-filename-directory ТОЖЕ возвращает T (хуки
 ;;;        СПДС затрагивают и его). Модуль отвязан от vl-filename-*:
@@ -171,7 +174,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.29")
+(setq *psp-ver* "0.30")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1041,7 +1044,7 @@
         ;; Сборка в один многостраничный PDF (если есть Ghostscript
         ;; и напечатано больше одного листа)
         (setq gs (if (> (length ok-list) 1)
-                   (vl-catch-all-apply 'psp-find-gs (list nil))))
+                   (vl-catch-all-apply 'psp-find-gs nil)))
         (if (vl-catch-all-error-p gs)
           (progn
             (princ "\nПСП: поиск Ghostscript ОШИБКА: ")
