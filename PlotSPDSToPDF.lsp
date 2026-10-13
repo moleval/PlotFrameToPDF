@@ -49,7 +49,11 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 15
+;;; Маркер редакции для RELOAD: (ред. 16
+;;; v0.16: прогон 4/4 без вопросов (PAPERUPDATE=0 подтвердился в свежем
+;;;        чертеже, порядок по листам верный, обе ориентации, упрощённая
+;;;        рамка с 22 полями тоже прошла). Отладочные контрольные точки
+;;;        [1]-[6] удалены; структура с разнесёнными setq сохранена.
 ;;; v0.15: первый прогон ЭКССПДСВПДФ прошёл, но свежий чертёж задавал
 ;;;        два вопроса («Сохранить изменения параметров листа?»,
 ;;;        «Перейти к печати?») — пара PAPERUPDATE; лента сдвигалась и
@@ -93,7 +97,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.15")
+(setq *psp-ver* "0.16")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -683,11 +687,8 @@
      (princ (strcat "\nПСП: выбрано объектов: " (itoa n)))
      (while (< i n)
        (setq ent (ssname ss i))
-       (princ "\n  ПСП: [1] имя объекта получено")
        (setq obj (vlax-ename->vla-object ent))
-       (princ "\n  ПСП: [2] vla-объект готов")
        (setq flds (psp-spds-fields ent))
-       (princ (strcat "\n  ПСП: [3] полей entget: " (itoa (length flds))))
        (setq fmt (psp-field flds "Format"))
        (if (null fmt)
          (setq fmt (psp-spds-prop obj *psp-spds-props-format*)))
@@ -695,10 +696,7 @@
        (if (null sheet)
          (setq sheet (psp-spds-prop obj *psp-spds-props-sheet*)))
        (setq sheet-i (atoi (if sheet sheet "0")))
-       (princ (strcat "\n  ПСП: [4] формат=" (if fmt fmt "-")
-                      " лист=" (if sheet sheet "-")))
        (setq bb (psp-spds-bbox obj))
-       (princ "\n  ПСП: [5] габариты получены")
        ;; кратность: A4 + Multiplicity 3 -> "A4X3" (бумага на 3 шага вверх)
        (setq multv (psp-field flds "Multiplicity"))
        (if (/= (type multv) 'STR) (setq multv "1"))
@@ -712,7 +710,6 @@
                            (car bb) (cadr bb) (caddr bb) (cadddr bb))
                      items))
          (setq skip (cons (cdr (assoc 5 (entget ent))) skip)))
-       (princ "\n  ПСП: [6] объект собран")
        (setq i (1+ i)))
      (setq items (psp-spds-sorted (reverse items)))
      (princ (strcat "\nПСП: к печати после сортировки: " (itoa (length items))))
