@@ -49,7 +49,14 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 39
+;;; Маркер редакции для RELOAD: (ред. 40
+;;; v0.40: диагностика на машине пользователя: вручную из консоли
+;;;        открывались ВСЕ механизмы (cmd start, explorer, rundll32),
+;;;        но старт из работающего LISP — нет (DDE-ассоциация .pdf,
+;;;        PDF-XChange; без прокачки сообщений запуск терялся).
+;;;        Новый psp-open-pdf: основной запуск через explorer.exe
+;;;        (своя очередь сообщений), запасные rundll32 и cmd start;
+;;;        каждое звено пишет T/nil в консоль.
 ;;; v0.39: по согласованию: после успешной сборки PDF открывается
 ;;;        системным просмотрщиком (startapp cmd /c start, путь в
 ;;;        кавычках с пустым заголовком). Выключатель *psp-open-pdf*
@@ -221,7 +228,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.39")
+(setq *psp-ver* "0.40")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -868,6 +875,27 @@
     ((null x) "")
     (t (vl-princ-to-string x))))
 
+;; Открыть PDF системными средствами. Основной путь — explorer.exe:
+;; он сам прокачивает сообщения и передаёт файл ассоциированному
+;; просмотрщику (cmd /c start из работающего LISP на DDE-ассоциациях
+;; иногда молча не срабатывает). Запасные: rundll32 FileProtocolHandler,
+;; затем cmd /c start. Возвращает T/nil последней попытки, пишет лог.
+(defun psp-open-pdf (path / ok)
+  (setq ok (startapp "explorer.exe" path))
+  (princ (strcat " (explorer=" (psp-s->str ok)))
+  (if (null ok)
+    (progn
+      (setq ok (startapp "rundll32.exe"
+                         (strcat "url.dll,FileProtocolHandler " path)))
+      (princ (strcat ", rundll32=" (psp-s->str ok)))))
+  (if (null ok)
+    (progn
+      (setq ok (startapp "cmd.exe"
+                         (strcat "/c start \"\" \"" path "\"")))
+      (princ (strcat ", cmd=" (psp-s->str ok)))))
+  (princ ")")
+  ok)
+
 (defun psp-merge-pdfs (gs src-lst trg / cmd k s)
   (setq cmd (strcat "\"" (psp-s->str gs) "\""
                     " -dBATCH -dNOPAUSE -dSAFER -dQUIET -sDEVICE=pdfwrite"
@@ -1196,11 +1224,9 @@
                   (t
                    (princ (strcat "\nСобрано в один PDF: " (psp-s->str res)))
                    (if *psp-open-pdf*
-                     (progn
-                       (startapp "cmd.exe"
-                                 (strcat "/c start \"\" \""
-                                         (psp-s->str res) "\""))
-                       (princ "\nПСП: открываю в просмотрщике PDF..."))))))
+                       (progn
+                         (princ "\nПСП: открываю в просмотрщике PDF...")
+                         (psp-open-pdf (psp-s->str res)))))))
               (princ "\nПСП: сборка в один PDF пропущена.")))
           (if (> (length ok-list) 1)
             (princ "\nПСП: Ghostscript не найден — один PDF не собираю.\nПСП: установите GS или задайте путь командой ПСПГС.")))
