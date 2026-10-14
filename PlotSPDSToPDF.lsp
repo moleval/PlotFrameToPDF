@@ -49,7 +49,15 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 56
+;;; ћаркер редакции дл€ RELOAD: (ред. 58
+;;; v0.58: лестница качества полностью переписана (замен€ет
+;;;        дефектный коммит 7f5d110, в который исправление не попало):
+;;;        0 = формат-в-формат через psp-format-idx (parse даЄт »ћя,
+;;;        запись даЄт только format-idx/size-up Ч иначе consp "A4");
+;;;        1 = один psp-spds-size-up; 2 = size-up -> им€ записи ->
+;;;        size-up (второй прыжок по имени: раньше на вход шла «јѕ»—№,
+;;;        format-idx давал nil, срабатывал fallback (nth 3) = A1 Ч
+;;;        отсюда A1 при Ђќтличномї в логе 0.56).
 ;;; v0.56: качество базового PlotFrameToPDF (Ё —¬ѕƒ‘) Ч втора€
 ;;;        радиострока в ѕ—ѕЌј—“–ќ… » (rq0/rq1/rq2 = x1/x2/x4,
 ;;;        setcfg AppData/PlotFrame/Quality; при загруженной базе
@@ -312,7 +320,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.56")
+(setq *psp-ver* "0.58")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1224,10 +1232,16 @@
                 h (- (nth 7 it) (nth 5 it))
                 rec (if (nth 2 it)
                       (car (psp-spds-parse (psp-spds-norm (nth 2 it)))))
-                rec (if (and rec (> *psp-quality* 0))
-                      (psp-spds-size-up rec) rec)
-                rec (if (and rec (= *psp-quality* 2))
-                      (psp-spds-size-up rec) rec)
+                rec (cond
+                      ((null rec) nil)
+                      ((= *psp-quality* 0)
+                       (if (psp-format-idx rec)
+                         (nth (psp-format-idx rec) *psp-formats*)
+                         nil))
+                      ((= *psp-quality* 2)
+                       (psp-spds-size-up
+                         (nth 0 (psp-spds-size-up rec))))
+                      (t (psp-spds-size-up rec)))
                 rec (if rec rec (nth 3 *psp-formats*))
                 media (if (>= w h) (nth 4 rec) (nth 3 rec))
                 rot-str (if (>= w h) "_L" "_P")
