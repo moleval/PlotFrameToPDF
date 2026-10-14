@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 55
+;;; Маркер редакции для RELOAD: (ред. 56
+;;; v0.56: качество базового PlotFrameToPDF (ЭКСВПДФ) — вторая
+;;;        радиострока в ПСПНАСТРОЙКИ (rq0/rq1/rq2 = x1/x2/x4,
+;;;        setcfg AppData/PlotFrame/Quality; при загруженной базе
+;;;        применяется сразу). В базе 3.19: *pfp-quality* читается
+;;;        на прогоне и задаёт *pfp-size-factor* (1/2/4).
 ;;; v0.55: ЗАДАЧА «КАЧЕСТВО ПЕЧАТИ»: *psp-quality* 0/1/2 —
 ;;;        Низкое=формат в формат, Среднее=+1 (как всегда), Отличное=+2.
 ;;;        Выбор: команда ПСПКАЧ / PSPQUAL и радиострока в диалоге
@@ -307,7 +312,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.55")
+(setq *psp-ver* "0.56")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1417,6 +1422,9 @@
         *psp-t-dels*    (= (psp-s->str (get_tile "dels")) "1")
         *psp-t-quality* (cond ((= (psp-s->str (get_tile "q0")) "1") 0)
                               ((= (psp-s->str (get_tile "q2")) "1") 2)
+                              (t 1))
+        *psp-t-pfq*     (cond ((= (psp-s->str (get_tile "rq0")) "1") 0)
+                              ((= (psp-s->str (get_tile "rq2")) "1") 2)
                               (t 1)))
   (princ))
 
@@ -1436,6 +1444,12 @@
   (write-line "    : radio_button { key = \"q0\"; label = \"Низкое (формат в формат)\"; }" f)
   (write-line "    : radio_button { key = \"q1\"; label = \"Среднее (+1)\"; }" f)
   (write-line "    : radio_button { key = \"q2\"; label = \"Отличное (+2)\"; }" f)
+  (write-line "  }" f)
+  (write-line "  : text { label = \"Качество PlotFrameToPDF (ЭКСВПДФ):\"; }" f)
+  (write-line "  : radio_row {" f)
+  (write-line "    : radio_button { key = \"rq0\"; label = \"Низкое (x1)\"; }" f)
+  (write-line "    : radio_button { key = \"rq1\"; label = \"Среднее (x2)\"; }" f)
+  (write-line "    : radio_button { key = \"rq2\"; label = \"Отличное (x4)\"; }" f)
   (write-line "  }" f)
   (write-line "  : row { spacer;" f)
   (write-line "    : button { key = \"ok\"; label = \"Применить\"; is_default = true; }" f)
@@ -1457,6 +1471,12 @@
       (set_tile "q0" (if (= *psp-quality* 0) "1" "0"))
       (set_tile "q1" (if (= *psp-quality* 1) "1" "0"))
       (set_tile "q2" (if (= *psp-quality* 2) "1" "0"))
+      (setq s (getcfg "AppData/PlotFrame/Quality"))
+      (setq n (if (= (type s) 'STR) (atoi s) 1))
+      (if (not (and (>= n 0) (<= n 2))) (setq n 1))
+      (set_tile "rq0" (if (= n 0) "1" "0"))
+      (set_tile "rq1" (if (= n 1) "1" "0"))
+      (set_tile "rq2" (if (= n 2) "1" "0"))
       (mode_tile "dir" 2)
       (action_tile "ok" "(psp-tiles-read)(done_dialog 1)")
       (setq id (start_dialog))
@@ -1485,6 +1505,9 @@
           (setcfg "AppData/PlotSPDS/DelSingles" (if *psp-del-singles* "1" "0"))
           (setq *psp-quality* *psp-t-quality*)
           (setcfg "AppData/PlotSPDS/Quality" (itoa *psp-quality*))
+          (setcfg "AppData/PlotFrame/Quality" (itoa *psp-t-pfq*))
+          (if (boundp 'c:ЭКСВПДФ)
+            (setq *pfp-quality* *psp-t-pfq*))
           (princ "\nПСП: настройки сохранены.")))))
       (unload_dialog d)
   (princ))
@@ -1523,6 +1546,7 @@
   (princ "\n  ПСПЭХОВКЛ/ПСПЭХОВЫКЛ — эхо ленты -ПЕЧАТЬ; ПСППОМОЩЬ (PSPHELP) — справка.")
   (princ "\nКачество печати: ПСПКАЧ (PSPQUAL) — Низкое=формат-в-формат,")
   (princ "\n  Среднее=+1 формат, Отличное=+2 формата; также в ПСПНАСТРОЙКИ.")
+  (princ "\nКачество базы (ЭКСВПДФ) — нижняя радиострока в ПСПНАСТРОЙКИ.")
   (princ "\nПорядок листов: по номеру (15, 15.1, 15.2...), «0» — титульный, первым.")
   (princ "\nБольше трёх листов — сборка в один PDF автоматически;")
   (princ "\n  открывается ТОЛЬКО склейка, одиночные листы не запускаются")

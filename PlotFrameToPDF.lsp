@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.18")
+(setq *pfp-ver* "3.19")
 ;; v3.18: «_As»-ошибка: ответ «_N» (не масштабировать веса линий)
 ;;        отправлялся безусловно, но ряд сборок (в т.ч. ваша) вопрос
 ;;        «Масштабировать веса линий?» не задаёт — лента съезжала и
@@ -364,6 +364,10 @@
   (pfp-row "*pfp-output-dir*"       (strcat "папка экспорта  [" dir-str "]"))
   (pfp-row "*pfp-consider-area*"    (strcat "учёт габаритов  [" area-str "]"))
   (pfp-row "*pfp-size-factor*"      (strcat "множитель  [" (rtos *pfp-size-factor* 2 2) "]"))
+  (pfp-row "*pfp-quality*"          (strcat "качество  ["
+                                            (cond ((= *pfp-quality* 0) "Низкое x1")
+                                                  ((= *pfp-quality* 2) "Отличное x4")
+                                                  (t "Среднее x2")) "]"))
   (pfp-row "*pfp-unit-scale*"       (strcat "мм в ед.  [" (rtos *pfp-unit-scale* 2 3) "]"))
   (pfp-row "*pfp-max-format*"       (strcat "макс. формат  [" max-str "]"))
   (pfp-row "*pfp-force-orient*"     (strcat "форс ориент.  [" orient-str "]"))
@@ -469,6 +473,16 @@
   ;; PAPERUPDATE: сохраняем, печатаем с 1 (без диалога «размер бумаги
   ;; не найден»), восстанавливаем на всех выходах (см. ниже)
   (setq old-paper   (vl-catch-all-apply 'getvar (list "PAPERUPDATE")))
+  ;; Качество: реестр -> *pfp-quality* -> множитель габаритов
+  (setq s-q (getcfg "AppData/PlotFrame/Quality"))
+  (if (= (type s-q) 'STR)
+    (progn
+      (setq s-q (atoi s-q))
+      (if (and (>= s-q 0) (<= s-q 2)) (setq *pfp-quality* s-q))))
+  (setq *pfp-size-factor*
+        (cond ((= *pfp-quality* 0) 1.0)
+              ((= *pfp-quality* 2) 4.0)
+              (t 2.0)))
   (setq old-cmdecho (getvar "CMDECHO"))
 
   ;; Сброс возможного «хвоста» от предыдущих команд
