@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.19")
+(setq *pfp-ver* "3.20")
 ;; v3.18: «_As»-ошибка: ответ «_N» (не масштабировать веса линий)
 ;;        отправлялся безусловно, но ряд сборок (в т.ч. ваша) вопрос
 ;;        «Масштабировать веса линий?» не задаёт — лента съезжала и
@@ -236,12 +236,24 @@
           (setq by-area (pfp-format-by-area w-mm h-mm))
           (if by-area (setq idx-area (pfp-format-idx (nth 0 by-area))))))
       (setq idx (max idx-cnt idx-area))
+      ;; Качество: Низкое = формат меньше, Отличное = формат больше
+      (setq idx (+ idx (cond ((= *pfp-quality* 0) -1)
+                             ((= *pfp-quality* 2) 1)
+                             (t 0))))
+      (if (>= idx (length *pfp-formats*))
+        (setq idx (1- (length *pfp-formats*))))
       (if *pfp-max-format*
         (progn
           (setq cap-idx (pfp-format-idx *pfp-max-format*))
           (if (and cap-idx (> idx cap-idx)) (setq idx cap-idx))))
-      (setq rec (nth idx *pfp-formats*)
-            want-land (pfp-want-landscape w-mm h-mm)
+      (if (< idx 0)
+        ;; Низкое при авто=A3: A4 в таблице нет — отдельная запись
+        (setq rec (list "A4" 297 210
+                        "ISO_full_bleed_A4_(210.00_x_297.00_MM)"
+                        "ISO_full_bleed_A4_(297.00_x_210.00_MM)"
+                        0))
+        (setq rec (nth idx *pfp-formats*)))
+      (setq want-land (pfp-want-landscape w-mm h-mm)
             media (if want-land (nth 4 rec) (nth 3 rec)))
       (list (nth 0 rec)
             media
@@ -365,9 +377,9 @@
   (pfp-row "*pfp-consider-area*"    (strcat "учёт габаритов  [" area-str "]"))
   (pfp-row "*pfp-size-factor*"      (strcat "множитель  [" (rtos *pfp-size-factor* 2 2) "]"))
   (pfp-row "*pfp-quality*"          (strcat "качество  ["
-                                            (cond ((= *pfp-quality* 0) "Низкое x1")
-                                                  ((= *pfp-quality* 2) "Отличное x4")
-                                                  (t "Среднее x2")) "]"))
+                                            (cond ((= *pfp-quality* 0) "Низкое (авто-1)")
+                                                  ((= *pfp-quality* 2) "Отличное (авто+1)")
+                                                  (t "Среднее (авто)")) "]"))
   (pfp-row "*pfp-unit-scale*"       (strcat "мм в ед.  [" (rtos *pfp-unit-scale* 2 3) "]"))
   (pfp-row "*pfp-max-format*"       (strcat "макс. формат  [" max-str "]"))
   (pfp-row "*pfp-force-orient*"     (strcat "форс ориент.  [" orient-str "]"))
@@ -473,16 +485,13 @@
   ;; PAPERUPDATE: сохраняем, печатаем с 1 (без диалога «размер бумаги
   ;; не найден»), восстанавливаем на всех выходах (см. ниже)
   (setq old-paper   (vl-catch-all-apply 'getvar (list "PAPERUPDATE")))
-  ;; Качество: реестр -> *pfp-quality* -> множитель габаритов
+  ;; Качество (реестр, ПСПНАСТРОЙКИ): сдвиг формата от авто-выбора:
+  ;; Низкое = формат меньше, Среднее = как всегда, Отличное = больше
   (setq s-q (getcfg "AppData/PlotFrame/Quality"))
   (if (= (type s-q) 'STR)
     (progn
       (setq s-q (atoi s-q))
       (if (and (>= s-q 0) (<= s-q 2)) (setq *pfp-quality* s-q))))
-  (setq *pfp-size-factor*
-        (cond ((= *pfp-quality* 0) 1.0)
-              ((= *pfp-quality* 2) 4.0)
-              (t 2.0)))
   (setq old-cmdecho (getvar "CMDECHO"))
 
   ;; Сброс возможного «хвоста» от предыдущих команд

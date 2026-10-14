@@ -49,7 +49,10 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 58
+;;; Маркер редакции для RELOAD: (ред. 59
+;;; v0.59: подписи радиостроки базы в ПСПНАСТРОЙКИ: Низкое (авто-1) /
+;;;        Среднее (авто) / Отличное (авто+1) — схема изменена в базе
+;;;        3.20: сдвиг формата от авто-выбора, множитель не трогается.
 ;;; v0.58: лестница качества полностью переписана (заменяет
 ;;;        дефектный коммит 7f5d110, в который исправление не попало):
 ;;;        0 = формат-в-формат через psp-format-idx (parse даёт ИМЯ,
@@ -320,7 +323,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.58")
+(setq *psp-ver* "0.59")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1461,9 +1464,9 @@
   (write-line "  }" f)
   (write-line "  : text { label = \"Качество PlotFrameToPDF (ЭКСВПДФ):\"; }" f)
   (write-line "  : radio_row {" f)
-  (write-line "    : radio_button { key = \"rq0\"; label = \"Низкое (x1)\"; }" f)
-  (write-line "    : radio_button { key = \"rq1\"; label = \"Среднее (x2)\"; }" f)
-  (write-line "    : radio_button { key = \"rq2\"; label = \"Отличное (x4)\"; }" f)
+  (write-line "    : radio_button { key = \"rq0\"; label = \"Низкое (авто-1)\"; }" f)
+  (write-line "    : radio_button { key = \"rq1\"; label = \"Среднее (авто)\"; }" f)
+  (write-line "    : radio_button { key = \"rq2\"; label = \"Отличное (авто+1)\"; }" f)
   (write-line "  }" f)
   (write-line "  : row { spacer;" f)
   (write-line "    : button { key = \"ok\"; label = \"Применить\"; is_default = true; }" f)
