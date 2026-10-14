@@ -49,7 +49,11 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 54
+;;; Маркер редакции для RELOAD: (ред. 55
+;;; v0.55: ЗАДАЧА «КАЧЕСТВО ПЕЧАТИ»: *psp-quality* 0/1/2 —
+;;;        Низкое=формат в формат, Среднее=+1 (как всегда), Отличное=+2.
+;;;        Выбор: команда ПСПКАЧ / PSPQUAL и радиострока в диалоге
+;;;        настроек; хранение setcfg AppData/PlotSPDS/Quality.
 ;;; v0.54: поля всё ещё приходили пустыми: в ряде версий AutoCAD
 ;;;        get_tile НЕ работает после закрытия диалога. Значения
 ;;;        читаются в callback кнопки «Применить» (psp-tiles-read)
@@ -303,7 +307,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.54")
+(setq *psp-ver* "0.55")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -370,6 +374,9 @@
 (setq *psp-open-delay-s* 5)  ; задержка открытия результата, секунд
 (setq *psp-open-res* T)      ; открывать результат (склейку/одиночные)
 (setq *psp-del-singles* T)   ; удалять одиночные листы после склейки
+;; Качество печати: 0 = формат в формат, 1 = +1 формат (как всегда),
+;; 2 = +2 формата. Выбор — ПСПКАЧ / PSPQUAL и строка в ПСПНАСТРОЙКИ
+(setq *psp-quality* 1)
 ;; Имя PDF-принтера. В DWG To PDF.pc3 может быть включено «Показывать
 ;; результаты в программе просмотра» — тогда AutoCAD САМ открывает
 ;; каждый отпечатанный лист (вкладки просмотрщика, блокировка
@@ -396,6 +403,9 @@
         ((= s "0") (setq *psp-del-singles* nil)))
   (setq s (getcfg "AppData/PlotSPDS/PC3"))
   (if (and (= (type s) 'STR) (/= s "")) (setq *psp-pc3* s))
+  (setq s nil n (getcfg "AppData/PlotSPDS/Quality"))
+  (if (= (type n) 'STR) (setq s (atoi n)))
+  (if (and (numberp s) (>= s 0) (<= s 2)) (setq *psp-quality* s))
   (princ))
 (psp-load-cfg)
 
@@ -1208,8 +1218,11 @@
           (setq w (- (nth 6 it) (nth 4 it))
                 h (- (nth 7 it) (nth 5 it))
                 rec (if (nth 2 it)
-                      (psp-spds-size-up
-                        (car (psp-spds-parse (psp-spds-norm (nth 2 it))))))
+                      (car (psp-spds-parse (psp-spds-norm (nth 2 it)))))
+                rec (if (and rec (> *psp-quality* 0))
+                      (psp-spds-size-up rec) rec)
+                rec (if (and rec (= *psp-quality* 2))
+                      (psp-spds-size-up rec) rec)
                 rec (if rec rec (nth 3 *psp-formats*))
                 media (if (>= w h) (nth 4 rec) (nth 3 rec))
                 rot-str (if (>= w h) "_L" "_P")
@@ -1401,7 +1414,10 @@
         *psp-t-thr*   (atoi (psp-s->str (get_tile "thr")))
         *psp-t-delay* (atoi (psp-s->str (get_tile "delay")))
         *psp-t-openres* (= (psp-s->str (get_tile "openres")) "1")
-        *psp-t-dels*    (= (psp-s->str (get_tile "dels")) "1"))
+        *psp-t-dels*    (= (psp-s->str (get_tile "dels")) "1")
+        *psp-t-quality* (cond ((= (psp-s->str (get_tile "q0")) "1") 0)
+                              ((= (psp-s->str (get_tile "q2")) "1") 2)
+                              (t 1)))
   (princ))
 
 ;; Диалог настроек (DCL генерируется во временную папку при вызове)
@@ -1416,6 +1432,11 @@
   (write-line "  : edit_box { key = \"delay\"; label = \"Задержка открытия, с:\"; edit_width = 5; }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"Открывать результат (склейку / одиночные)\"; }" f)
   (write-line "  : toggle { key = \"dels\"; label = \"Удалять одиночные листы после склейки\"; }" f)
+  (write-line "  : radio_row {" f)
+  (write-line "    : radio_button { key = \"q0\"; label = \"Низкое (формат в формат)\"; }" f)
+  (write-line "    : radio_button { key = \"q1\"; label = \"Среднее (+1)\"; }" f)
+  (write-line "    : radio_button { key = \"q2\"; label = \"Отличное (+2)\"; }" f)
+  (write-line "  }" f)
   (write-line "  : row { spacer;" f)
   (write-line "    : button { key = \"ok\"; label = \"Применить\"; is_default = true; }" f)
   (write-line "    : button { key = \"cancel\"; label = \"Отмена\"; is_cancel = true; }" f)
@@ -1433,6 +1454,9 @@
       (set_tile "delay" (itoa *psp-open-delay-s*))
       (set_tile "openres" (if *psp-open-res* "1" "0"))
       (set_tile "dels" (if *psp-del-singles* "1" "0"))
+      (set_tile "q0" (if (= *psp-quality* 0) "1" "0"))
+      (set_tile "q1" (if (= *psp-quality* 1) "1" "0"))
+      (set_tile "q2" (if (= *psp-quality* 2) "1" "0"))
       (mode_tile "dir" 2)
       (action_tile "ok" "(psp-tiles-read)(done_dialog 1)")
       (setq id (start_dialog))
@@ -1459,12 +1483,36 @@
           (setcfg "AppData/PlotSPDS/OpenRes" (if *psp-open-res* "1" "0"))
           (setq *psp-del-singles* *psp-t-dels*)
           (setcfg "AppData/PlotSPDS/DelSingles" (if *psp-del-singles* "1" "0"))
+          (setq *psp-quality* *psp-t-quality*)
+          (setcfg "AppData/PlotSPDS/Quality" (itoa *psp-quality*))
           (princ "\nПСП: настройки сохранены.")))))
       (unload_dialog d)
   (princ))
 
 (defun c:ПСПНАСТРОЙКИ () (psp-settings-dialog))
 (defun c:PSPSET () (c:ПСПНАСТРОЙКИ))
+
+;; Качество печати SPDS: 0 = формат в формат, 1 = +1, 2 = +2
+(defun c:ПСПКАЧ ( / s names)
+  (setq names (list "Низкое (формат в формат)"
+                    "Среднее (+1 формат)"
+                    "Отличное (+2 формата)"))
+  (initget "Низкое Среднее Отличное _ Low Med High")
+  (setq s (getkword (strcat "\nКачество печати [Низкое/Среднее/Отличное] <"
+                            (nth *psp-quality*
+                                 (list "Низкое" "Среднее" "Отличное"))
+                            ">: ")))
+  (cond
+    ((null s))                                   ; Enter — оставить
+    ((member (strcase s)
+             (list (strcase "Низкое") (strcase "Low"))) (setq *psp-quality* 0))
+    ((member (strcase s)
+             (list (strcase "Отличное") (strcase "High"))) (setq *psp-quality* 2))
+    (t (setq *psp-quality* 1)))
+  (setcfg "AppData/PlotSPDS/Quality" (itoa *psp-quality*))
+  (princ (strcat "\nПСП: качество печати — " (nth *psp-quality* names) "."))
+  (princ))
+(defun c:PSPQUAL () (c:ПСПКАЧ))
 
 ;; Справка: команды и однократная настройка «тихого» PDF-принтера
 (defun c:ПСППОМОЩЬ ( )
@@ -1473,6 +1521,8 @@
   (princ "\n  настройки (папка PDF, автосборка, задержка, принтер, удаление);")
   (princ "\n  ПСППАПКА (PSPPAPKA) — папка сборок; ПСПГС (PSPGS) — путь к Ghostscript;")
   (princ "\n  ПСПЭХОВКЛ/ПСПЭХОВЫКЛ — эхо ленты -ПЕЧАТЬ; ПСППОМОЩЬ (PSPHELP) — справка.")
+  (princ "\nКачество печати: ПСПКАЧ (PSPQUAL) — Низкое=формат-в-формат,")
+  (princ "\n  Среднее=+1 формат, Отличное=+2 формата; также в ПСПНАСТРОЙКИ.")
   (princ "\nПорядок листов: по номеру (15, 15.1, 15.2...), «0» — титульный, первым.")
   (princ "\nБольше трёх листов — сборка в один PDF автоматически;")
   (princ "\n  открывается ТОЛЬКО склейка, одиночные листы не запускаются")
