@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 60
+;;; Маркер редакции для RELOAD: (ред. 61
+;;; v0.61: ПСПНАСТРОЙКИ: принтер — ВЫПАДАЮЩИЙ СПИСОК всех .pc3 из
+;;;        папки конфигураций плоттеров (PrinterConfigDir; если папка
+;;;        недоступна — текущий + DWG To PDF.pc3). Папка сохранения —
+;;;        кнопка «Обзор...»: диалог выбора папки Windows (Shell;
+;;;        без COM — сообщение и ввод вручную).
 ;;; v0.60: ПАПКА СОХРАНЕНИЯ теперь общая и рабочая: настроенная папка
 ;;;        становится *psp-output-dir* — СПДС печатает листы и кладёт
 ;;;        склейку в <папка>\SPDS_<штамп>; перенос (move) больше не
@@ -331,7 +336,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.60")
+(setq *psp-ver* "0.61")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1429,9 +1434,63 @@
 ;; Открыть папку журналов и сборок в Проводнике
 ;; Чтение тайлов в callback кнопки «Применить»: после закрытия
 ;; диалога get_tile в ряде версий AutoCAD уже не действует
+;; Список PDF-принтеров: все .pc3 из папки конфигураций плоттеров
+(defun psp-pc3-list ( / d lst)
+  (setq d (getenv "PrinterConfigDir"))
+  (if (= (type d) 'STR)
+    (progn
+      (setq lst (vl-catch-all-apply
+                  'vl-directory-files (list d "*.pc3" -1)))
+      (if (not (listp lst)) (setq lst nil))))
+  (if lst
+    (setq lst (vl-sort lst
+                (function (lambda (a b) (< (strcase a) (strcase b))))))
+    (setq lst (list "DWG To PDF.pc3")))
+  (if (not (member (strcase (if *psp-pc3* *psp-pc3* "") T)
+                   (mapcar '(lambda (x) (strcase x T)) lst)))
+    (setq lst (cons (if *psp-pc3* *psp-pc3* "PlotSPDSToPDF.pc3") lst)))
+  lst)
+
+;; Заполнить выпадающий список и выбрать текущее значение
+(defun psp-popup-fill (key lst cur / k idx)
+  (start_list key)
+  (foreach s lst (add_list s))
+  (end_list)
+  (setq k 0 idx 0)
+  (foreach s lst
+    (if (and (= idx 0) (= (strcase s T) (strcase cur T))) (setq idx k))
+    (setq k (1+ k)))
+  (set_tile key (itoa idx))
+  (princ))
+
+;; Кнопка «Обзор...»: диалог выбора папки Windows (проводник)
+(defun psp-browse-folder ( / sh hw fld pth)
+  (setq sh (vl-catch-all-apply
+             'vlax-create-object (list "Shell.Application")))
+  (if (and sh (not (vl-catch-all-error-p sh)))
+    (progn
+      (setq hw (vl-catch-all-apply
+                 'vlax-get (list (vlax-get-acad-object) 'HWND)))
+      (if (/= (type hw) 'INT) (setq hw 0))
+      (setq fld (vl-catch-all-apply
+                  'vlax-invoke
+                  (list sh 'BrowseForFolder hw "Выберите папку для PDF" 0)))
+      (if (and fld (not (vl-catch-all-error-p fld)))
+        (progn
+          (setq pth (vl-catch-all-apply
+                      'vlax-get (list (vlax-get fld 'Self) 'Path)))
+          (if (and (= (type pth) 'STR) (/= pth "") (/= ":" (substr pth 1 1)))
+            (set_tile "dir" pth))
+          (vl-catch-all-apply 'vlax-release-object (list fld)))))
+    (princ "\nПСП: диалог папок недоступен — введите путь вручную."))
+  (if (and sh (not (vl-catch-all-error-p sh)))
+    (vl-catch-all-apply 'vlax-release-object (list sh)))
+  (princ))
+
 (defun psp-tiles-read ( )
   (setq *psp-t-dir*   (psp-s->str (get_tile "dir"))
-        *psp-t-pc3*   (psp-s->str (get_tile "pc3"))
+        *psp-t-pc3*   (or (nth (atoi (get_tile "pc3list")) *psp-t-pc3s*)
+                          *psp-pc3* "PlotSPDSToPDF.pc3")
         *psp-t-thr*   (atoi (psp-s->str (get_tile "thr")))
         *psp-t-delay* (atoi (psp-s->str (get_tile "delay")))
         *psp-t-openres* (= (psp-s->str (get_tile "openres")) "1")
@@ -1449,9 +1508,12 @@
   (setq dcl (strcat (getenv "TEMP") "\\PlotSPDSToPDF_settings.dcl"))
   (setq f (open dcl "w"))
   (write-line "psp_set : dialog { label = \"PlotSPDSToPDF — настройки\";" f)
-  (write-line "  : edit_box { key = \"dir\"; label = \"Папка сохранения PDF:\"; edit_width = 48; }" f)
+  (write-line "  : row {" f)
+  (write-line "    : edit_box { key = \"dir\"; label = \"Папка сохранения:\"; edit_width = 36; }" f)
+  (write-line "    : button { key = \"browse\"; label = \"Обзор...\"; }" f)
+  (write-line "  }" f)
   (write-line "  : text { label = \"   (пусто = временная папка сборок)\"; }" f)
-  (write-line "  : edit_box { key = \"pc3\"; label = \"PDF-принтер (pc3):\"; edit_width = 34; }" f)
+  (write-line "  : popup_list { key = \"pc3list\"; label = \"PDF-принтер (pc3):\"; edit_width = 34; }" f)
   (write-line "  : edit_box { key = \"thr\"; label = \"Автосборка при листах БОЛЬШЕ:\"; edit_width = 5; }" f)
   (write-line "  : edit_box { key = \"delay\"; label = \"Задержка открытия, с:\"; edit_width = 5; }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"Открывать результат (склейку / одиночные)\"; }" f)
@@ -1482,7 +1544,8 @@
       (princ (strcat "\nПСП: диалог настроек не открылся (" dcl ").")))
     (progn
       (set_tile "dir" (if *psp-pdf-dir* *psp-pdf-dir* ""))
-      (set_tile "pc3" *psp-pc3*)
+      (setq *psp-t-pc3s* (psp-pc3-list))
+      (psp-popup-fill "pc3list" *psp-t-pc3s* *psp-pc3*)
       (set_tile "thr" (itoa *psp-auto-merge-n*))
       (set_tile "delay" (itoa *psp-open-delay-s*))
       (set_tile "openres" (if *psp-open-res* "1" "0"))
@@ -1497,6 +1560,7 @@
       (set_tile "rq1" (if (= n 1) "1" "0"))
       (set_tile "rq2" (if (= n 2) "1" "0"))
       (mode_tile "dir" 2)
+      (action_tile "browse" "(psp-browse-folder)")
       (action_tile "ok" "(psp-tiles-read)(done_dialog 1)")
       (setq id (start_dialog))
       (if (= id 1)
@@ -1509,7 +1573,7 @@
           (setcfg "AppData/PlotFrame/OutDir" s)
           (if (boundp 'c:ЭКСВПДФ)
             (setq *pfp-output-dir* (if (/= s "") s nil)))
-          (setq s *psp-t-pc3*)
+          (setq s (psp-s->str *psp-t-pc3*))
           (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
           (setq *psp-pc3* s)
           (setcfg "AppData/PlotSPDS/PC3" s)
