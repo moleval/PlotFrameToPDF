@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.20")
+(setq *pfp-ver* "3.21")
 ;; v3.18: «_As»-ошибка: ответ «_N» (не масштабировать веса линий)
 ;;        отправлялся безусловно, но ряд сборок (в т.ч. ваша) вопрос
 ;;        «Масштабировать веса линий?» не задаёт — лента съезжала и
@@ -36,6 +36,8 @@
 ;; «Масштабировать веса линий?» — ТОЛЬКО для сборок AutoCAD,
 ;; где такой вопрос задаётся (переключатель — ПФПЛЕНТА)
 (setq *pfp-tape-mode* nil)
+;; T: не глушить эхо -ПЕЧАТЬ (диагностика ленты; ПФПЭХОВКЛ/ПФПЭХОВЫКЛ)
+(setq *pfp-plot-echo* nil)
 
 (setq *pfp-open-mode* "rundll")
 (setq *pfp-open-delay* 300)
@@ -492,6 +494,10 @@
     (progn
       (setq s-q (atoi s-q))
       (if (and (>= s-q 0) (<= s-q 2)) (setq *pfp-quality* s-q))))
+  ;; Общая папка сохранения (ПСПНАСТРОЙКИ): непустая -> печатаем туда
+  (setq s-o (getcfg "AppData/PlotFrame/OutDir"))
+  (if (= (type s-o) 'STR)
+    (setq *pfp-output-dir* (if (/= s-o "") s-o nil)))
   (setq old-cmdecho (getvar "CMDECHO"))
 
   ;; Сброс возможного «хвоста» от предыдущих команд
@@ -551,7 +557,7 @@
           ;; вопросов «лист последним»/«удалять скрытые», но есть
           ;; «Задать тонирование» (ответ — ключевое слово, не Да/Нет).
           ;; Лента собирается по TILEMODE, иначе ответы «съезжают».
-          (setvar "CMDECHO" 0)
+          (setvar "CMDECHO" (if *pfp-plot-echo* 1 0))
           (setq plot-tape
             (append
               (list "_.-plot"
@@ -660,6 +666,12 @@
       (princ "\nПФП: выбор отменён."))
   (princ))
 
+(defun c:ПФПЭХОВКЛ () (setq *pfp-plot-echo* T)
+  (princ "\nПФП: эхо печати ВКЛЮЧЕНО — подсказки -ПЕЧАТЬ будут видны.")(princ))
+(defun c:PFPECHOON () (c:ПФПЭХОВКЛ))
+(defun c:ПФПЭХОВЫКЛ () (setq *pfp-plot-echo* nil)
+  (princ "\nПФП: эхо печати выключено.")(princ))
+(defun c:PFPECHOOFF () (c:ПФПЭХОВЫКЛ))
 (defun c:ПФПЛЕНТА ( )
   (setq *pfp-tape-mode* (not *pfp-tape-mode*))
   (princ (if *pfp-tape-mode*
@@ -675,7 +687,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Автозагрузка
 ;; ---------------------------------------------------------------------------
-(princ (strcat "\nЗагружено: PlotFrameToPDF.lsp v" *pfp-ver* " — команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА / ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП / ПФПЛЕНТА / PFPTAPE."))
+(princ (strcat "\nЗагружено: PlotFrameToPDF.lsp v" *pfp-ver* " — команды: ЭКСВПДФ / EXPTPDF / ОЧИСТПДФ / ПФПТАБЛ / ПФПСТАТ / ПФПМЕДИА / ПФПЦВЕТ / ПФПЧБ / ПФППАПКА / ПФПТЕМП / ПФПЛЕНТА / PFPTAPE / ПФПЭХОВКЛ."))
 (pfp-print-table)
 (pfp-print-vars)
 (pfp-print-hints)

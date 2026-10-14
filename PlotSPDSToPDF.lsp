@@ -49,7 +49,15 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 59
+;;; Маркер редакции для RELOAD: (ред. 60
+;;; v0.60: ПАПКА СОХРАНЕНИЯ теперь общая и рабочая: настроенная папка
+;;;        становится *psp-output-dir* — СПДС печатает листы и кладёт
+;;;        склейку в <папка>\SPDS_<штамп>; перенос (move) больше не
+;;;        нужен, блок удалён. База (если загружена) получает ту же
+;;;        папку (AppData/PlotFrame/OutDir). Диалог: две РАМОЧКИ
+;;;        качества — «Рамочка в PDF» и «Формат СПДС в PDF»; подписи
+;;;        Низкое/Среднее/Высокое (пробелы в «авто -1», «авто +1»);
+;;;        ПСПКАЧ: Высокое вместо Отличного.
 ;;; v0.59: подписи радиостроки базы в ПСПНАСТРОЙКИ: Низкое (авто-1) /
 ;;;        Среднее (авто) / Отличное (авто+1) — схема изменена в базе
 ;;;        3.20: сдвиг формата от авто-выбора, множитель не трогается.
@@ -323,7 +331,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.59")
+(setq *psp-ver* "0.60")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -404,7 +412,8 @@
 ;; Восстановление настроек из реестра (записывает ПСПНАСТРОЙКИ)
 (defun psp-load-cfg ( / s n)
   (setq s (getcfg "AppData/PlotSPDS/PDFDir"))
-  (if (= (type s) 'STR) (setq *psp-pdf-dir* s))
+  (if (and (= (type s) 'STR) (/= s ""))
+    (setq *psp-pdf-dir* s *psp-output-dir* s))
   (setq s nil n (getcfg "AppData/PlotSPDS/AutoMergeN"))
   (if (= (type n) 'STR) (setq s (atoi n)))
   (if (and (numberp s) (> s 0)) (setq *psp-auto-merge-n* s))
@@ -1378,17 +1387,7 @@
                                   "проверьте gs вручную: " (psp-s->str gs))))
                   (t
                    (princ (strcat "\nСобрано в один PDF: " (psp-s->str res)))
-                   (if (and *psp-pdf-dir* (/= *psp-pdf-dir* ""))
-                     (progn
-                       (startapp "cmd.exe"
-                                 (strcat "/c if not exist \"" *psp-pdf-dir*
-                                         "\" md \"" *psp-pdf-dir* "\" & move /y \""
-                                         (psp-s->str res) "\" \""
-                                         *psp-pdf-dir* "\\\""))
-                       (setq res (strcat *psp-pdf-dir* "\\"
-                                         (psp-file-base dir) ".pdf"))
-                       (princ (strcat "\nПСП: альбом сохранён: " res))))
-                   (if *psp-open-res*
+(if *psp-open-res*
                      (progn
                        (princ "\nПСП: открываю в просмотрщике PDF...")
                        (if *psp-del-singles*
@@ -1457,16 +1456,19 @@
   (write-line "  : edit_box { key = \"delay\"; label = \"Задержка открытия, с:\"; edit_width = 5; }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"Открывать результат (склейку / одиночные)\"; }" f)
   (write-line "  : toggle { key = \"dels\"; label = \"Удалять одиночные листы после склейки\"; }" f)
-  (write-line "  : radio_row {" f)
-  (write-line "    : radio_button { key = \"q0\"; label = \"Низкое (формат в формат)\"; }" f)
-  (write-line "    : radio_button { key = \"q1\"; label = \"Среднее (+1)\"; }" f)
-  (write-line "    : radio_button { key = \"q2\"; label = \"Отличное (+2)\"; }" f)
+  (write-line "  : boxed_column { label = \"Рамочка в PDF (ЭКСВПДФ)\";" f)
+  (write-line "    : radio_row {" f)
+  (write-line "      : radio_button { key = \"rq0\"; label = \"Низкое (авто -1)\"; }" f)
+  (write-line "      : radio_button { key = \"rq1\"; label = \"Среднее (авто)\"; }" f)
+  (write-line "      : radio_button { key = \"rq2\"; label = \"Высокое (авто +1)\"; }" f)
+  (write-line "    }" f)
   (write-line "  }" f)
-  (write-line "  : text { label = \"Качество PlotFrameToPDF (ЭКСВПДФ):\"; }" f)
-  (write-line "  : radio_row {" f)
-  (write-line "    : radio_button { key = \"rq0\"; label = \"Низкое (авто-1)\"; }" f)
-  (write-line "    : radio_button { key = \"rq1\"; label = \"Среднее (авто)\"; }" f)
-  (write-line "    : radio_button { key = \"rq2\"; label = \"Отличное (авто+1)\"; }" f)
+  (write-line "  : boxed_column { label = \"Формат СПДС в PDF (ЭКССПДСВПДФ)\";" f)
+  (write-line "    : radio_row {" f)
+  (write-line "      : radio_button { key = \"q0\"; label = \"Низкое (формат в формат)\"; }" f)
+  (write-line "      : radio_button { key = \"q1\"; label = \"Среднее (+1)\"; }" f)
+  (write-line "      : radio_button { key = \"q2\"; label = \"Высокое (+2)\"; }" f)
+  (write-line "    }" f)
   (write-line "  }" f)
   (write-line "  : row { spacer;" f)
   (write-line "    : button { key = \"ok\"; label = \"Применить\"; is_default = true; }" f)
@@ -1502,8 +1504,11 @@
           (setq s *psp-t-dir*)
           (while (and (> (strlen s) 0) (= (substr s (strlen s) 1) "\\"))
             (setq s (substr s 1 (1- (strlen s)))))
-          (setq *psp-pdf-dir* s)
+          (setq *psp-pdf-dir* s *psp-output-dir* (if (/= s "") s nil))
           (setcfg "AppData/PlotSPDS/PDFDir" s)
+          (setcfg "AppData/PlotFrame/OutDir" s)
+          (if (boundp 'c:ЭКСВПДФ)
+            (setq *pfp-output-dir* (if (/= s "") s nil)))
           (setq s *psp-t-pc3*)
           (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
           (setq *psp-pc3* s)
@@ -1536,18 +1541,18 @@
 (defun c:ПСПКАЧ ( / s names)
   (setq names (list "Низкое (формат в формат)"
                     "Среднее (+1 формат)"
-                    "Отличное (+2 формата)"))
-  (initget "Низкое Среднее Отличное _ Low Med High")
-  (setq s (getkword (strcat "\nКачество печати [Низкое/Среднее/Отличное] <"
+                    "Высокое (+2 формата)"))
+  (initget "Низкое Среднее Высокое _ Low Med High")
+  (setq s (getkword (strcat "\nКачество печати [Низкое/Среднее/Высокое] <"
                             (nth *psp-quality*
-                                 (list "Низкое" "Среднее" "Отличное"))
+                                 (list "Низкое" "Среднее" "Высокое"))
                             ">: ")))
   (cond
     ((null s))                                   ; Enter — оставить
     ((member (strcase s)
              (list (strcase "Низкое") (strcase "Low"))) (setq *psp-quality* 0))
     ((member (strcase s)
-             (list (strcase "Отличное") (strcase "High"))) (setq *psp-quality* 2))
+             (list (strcase "Высокое") (strcase "High"))) (setq *psp-quality* 2))
     (t (setq *psp-quality* 1)))
   (setcfg "AppData/PlotSPDS/Quality" (itoa *psp-quality*))
   (princ (strcat "\nПСП: качество печати — " (nth *psp-quality* names) "."))
@@ -1562,7 +1567,7 @@
   (princ "\n  ПСППАПКА (PSPPAPKA) — папка сборок; ПСПГС (PSPGS) — путь к Ghostscript;")
   (princ "\n  ПСПЭХОВКЛ/ПСПЭХОВЫКЛ — эхо ленты -ПЕЧАТЬ; ПСППОМОЩЬ (PSPHELP) — справка.")
   (princ "\nКачество печати: ПСПКАЧ (PSPQUAL) — Низкое=формат-в-формат,")
-  (princ "\n  Среднее=+1 формат, Отличное=+2 формата; также в ПСПНАСТРОЙКИ.")
+  (princ "\n  Среднее=+1 формат, Высокое=+2 формата; также в ПСПНАСТРОЙКИ.")
   (princ "\nКачество базы (ЭКСВПДФ) — нижняя радиострока в ПСПНАСТРОЙКИ.")
   (princ "\nПорядок листов: по номеру (15, 15.1, 15.2...), «0» — титульный, первым.")
   (princ "\nБольше трёх листов — сборка в один PDF автоматически;")
