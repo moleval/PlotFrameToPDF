@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.26")
+(setq *pfp-ver* "3.27")
 ;; v3.18: Ђ_Asї-ошибка: ответ Ђ_Nї (не масштабировать веса линий)
 ;;        отправл€лс€ безусловно, но р€д сборок (в т.ч. ваша) вопрос
 ;;        Ђћасштабировать веса линий?ї не задаЄт Ч лента съезжала и
@@ -148,6 +148,23 @@
 
 (defun pfp-output-dir ( / d )
   (setq d (if *pfp-output-dir* *pfp-output-dir* (pfp-default-dir)))
+  (if (not (vl-file-directory-p d)) (vl-mkdir d))
+  d)
+
+;; »м€ чертежа без расширени€ (DWGNAME; DWGTITLED Ч только флаг 0/1)
+(defun pfp-drawing-name ( / s k)
+  (setq s (getvar "DWGNAME"))
+  (if (/= (type s) 'STR) (setq s ""))
+  (setq k (strlen s))
+  ;; точка трЄхсимвольного расширени€ Ч на позиции k-3
+  (if (and (> k 4) (= (substr s (- k 3) 1) "."))
+    (setq s (substr s 1 (- k 4))))
+  (if (= s "") (setq s "–амки"))
+  s)
+
+;; ѕапка чертежа: <папка экспорта>\<им€ чертежа> Ч создаЄтс€ при нужде
+(defun pfp-drawing-dir ( / d)
+  (setq d (strcat (pfp-output-dir) "\\" (pfp-drawing-name)))
   (if (not (vl-file-directory-p d)) (vl-mkdir d))
   d)
 
@@ -556,7 +573,7 @@
 
           (setq ctb-name (if *pfp-color-mode* *pfp-ctb-color* *pfp-ctb-mono*))
 
-          (setq dir       (pfp-output-dir)
+          (setq dir       (pfp-drawing-dir)
                 fname     (itoa (pfp-next-number dir))
                 fname-pdf (strcat dir "\\" fname))
 
@@ -663,7 +680,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defun plot-frame-to-pdf-clean ( / dir files cnt)
-  (setq dir (pfp-output-dir))
+  (setq dir (pfp-drawing-dir))
   (if (not (vl-file-directory-p dir))
     (princ "\nѕапка не существует.")
     (progn
