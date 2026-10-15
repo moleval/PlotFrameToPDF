@@ -49,7 +49,13 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 68
+;;; ћаркер редакции дл€ RELOAD: (ред. 69
+;;; v0.69: реестр отравлен частичным Apply 0.67 (PC3="T" Ч в баннере
+;;;        Ђѕринтер: Tї): PC3 теперь принимаетс€/сохран€етс€ “ќЋ№ ќ
+;;;        при маске *.pc3; все *psp-t-* читаютс€ через строгую
+;;;        psp-str-or (не-строка -> умолчание), setcfg значений Ч
+;;;        через psp-s->str; сообщение об ошибке диалога печатает
+;;;        Ё“јѕ (заполнение списков / диалог / сохранение настроек).
 ;;; v0.68: ѕ—ѕЌј—“–ќ… » не должна ломать печать: старт диалога и
 ;;;        блок Ђѕрименитьї обЄрнуты в vl-catch-all-apply, unload_di-
 ;;;        alog гарантирован при ЋёЅќћ исходе (живой диалог блокирует
@@ -383,7 +389,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.68")
+(setq *psp-ver* "0.69")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -486,7 +492,9 @@
   (cond ((= s "1") (setq *psp-del-singles* T))
         ((= s "0") (setq *psp-del-singles* nil)))
   (setq s (getcfg "AppData/PlotSPDS/PC3"))
-  (if (and (= (type s) 'STR) (/= s "")) (setq *psp-pc3* s))
+  (if (and (= (type s) 'STR) (/= s "")
+           (wcmatch (strcase s T) "*`.pc3"))
+    (setq *psp-pc3* s))
   (setq s nil n (getcfg "AppData/PlotSPDS/Quality"))
   (if (= (type n) 'STR) (setq s (atoi n)))
   (if (and (numberp s) (>= s 0) (<= s 2)) (setq *psp-quality* s))
@@ -1106,6 +1114,10 @@
     ((null x) "")
     (t (vl-princ-to-string x))))
 
+;; “олько STR, иначе умолчание: T из списков не должен выживать
+(defun psp-str-or (v d)
+  (if (= (type v) 'STR) v d))
+
 ;; ќткрыть PDF и убрать одиночные листы. Ghostscript создаЄт файл
 ;; выхода —–ј«”, а закрывает только в конце работы: и открытие, и
 ;; удаление листов выполн€ютс€ с задержкой ~5 с (ping) в ќ“ƒ≈Ћ№Ќќћ
@@ -1611,13 +1623,16 @@
 
 (defun psp-tiles-read ( )
   (setq *psp-t-dir*   (psp-s->str (get_tile "dir"))
-        *psp-t-pc3*   (or (nth (atoi (get_tile "pc3list")) *psp-t-pc3s*)
-                          *psp-pc3* "PlotSPDSToPDF.pc3")
+        *psp-t-pc3*   (psp-str-or
+                        (nth (atoi (get_tile "pc3list")) *psp-t-pc3s*)
+                        (psp-str-or *psp-pc3* "PlotSPDSToPDF.pc3"))
         *psp-t-pcol*  (= (psp-s->str (get_tile "pcol")) "1")
-        *psp-t-ctbm*  (or (nth (atoi (get_tile "ctbm")) *psp-t-ctbs*)
-                          "monochrome.ctb")
-        *psp-t-ctbc*  (or (nth (atoi (get_tile "ctbc")) *psp-t-ctbs*)
-                          "acad.ctb")
+        *psp-t-ctbm*  (psp-str-or
+                        (nth (atoi (get_tile "ctbm")) *psp-t-ctbs*)
+                        "monochrome.ctb")
+        *psp-t-ctbc*  (psp-str-or
+                        (nth (atoi (get_tile "ctbc")) *psp-t-ctbs*)
+                        "acad.ctb")
         *psp-t-thr*   (atoi (psp-s->str (get_tile "thr")))
         *psp-t-delay* (atoi (psp-s->str (get_tile "delay")))
         *psp-t-openres* (= (psp-s->str (get_tile "openres")) "1")
@@ -1631,7 +1646,7 @@
   (princ))
 
 ;; ƒиалог настроек (DCL генерируетс€ во временную папку при вызове)
-(defun psp-settings-dialog ( / f dcl d id s n res)
+(defun psp-settings-dialog ( / f dcl d id s n res st)
   (setq dcl (strcat (getenv "TEMP") "\\PlotSPDSToPDF_settings.dcl"))
   (setq f (open dcl "w"))
   (write-line "psp_set : dialog { label = \"PlotSPDSToPDF Ч настройки\";" f)
@@ -1675,7 +1690,8 @@
       (unload_dialog d)
       (princ (strcat "\nѕ—ѕ: диалог настроек не открылс€ (" dcl ").")))
     (progn
-      (set_tile "dir" (if *psp-pdf-dir* *psp-pdf-dir* ""))
+      (setq st "заполнение списков")
+      (set_tile "dir" (psp-s->str (if *psp-pdf-dir* *psp-pdf-dir* "")))
       (setq *psp-t-pc3s* (psp-pc3-list))
       (psp-popup-fill "pc3list" *psp-t-pc3s* *psp-pc3*)
       (set_tile "pcol"
@@ -1708,7 +1724,9 @@
       (setq res (vl-catch-all-apply
                   '(lambda ( )
                      (progn
+      (setq st "диалог")
       (setq id (start_dialog))
+      (setq st "сохранение настроек")
       (if (= id 1)
         (progn
           (setq s *psp-t-dir*)
@@ -1720,14 +1738,15 @@
           (if (boundp 'c:Ё —¬ѕƒ‘)
             (setq *pfp-output-dir* (if (/= s "") s nil)))
           (setq s (psp-s->str *psp-t-pc3*))
-          (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
+          (if (not (wcmatch (strcase s T) "*`.pc3"))
+            (setq s "PlotSPDSToPDF.pc3"))
           (setq *psp-pc3* s)
           (setcfg "AppData/PlotSPDS/PC3" s)
           ;; ѕараметры печати базы (задача 12): цвет + CTB
           (setcfg "AppData/PlotFrame/ColorMode"
                   (if *psp-t-pcol* "1" "0"))
-          (setcfg "AppData/PlotFrame/CtbMono" *psp-t-ctbm*)
-          (setcfg "AppData/PlotFrame/CtbColor" *psp-t-ctbc*)
+          (setcfg "AppData/PlotFrame/CtbMono" (psp-s->str *psp-t-ctbm*))
+          (setcfg "AppData/PlotFrame/CtbColor" (psp-s->str *psp-t-ctbc*))
           (if (boundp 'c:Ё —¬ѕƒ‘)
             (progn
               (setq *pfp-color-mode* *psp-t-pcol*)
@@ -1754,7 +1773,8 @@
       (unload_dialog d)
       (if (vl-catch-all-error-p res)
         (progn
-          (princ "\nѕ—ѕ: ошибка диалога настроек: ")
+          (princ (strcat "\nѕ—ѕ: ошибка диалога настроек [этап: "
+                         (psp-s->str st) "]: "))
           (princ (vl-catch-all-error-message res))))
   (princ))
 
