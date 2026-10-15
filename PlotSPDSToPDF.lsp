@@ -49,7 +49,16 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 73
+;;; ћаркер редакции дл€ RELOAD: (ред. 74
+;;; v0.74: (1) папка сборки названа по чертежу, как и альбом:
+;;;        <им€>_<дата>_<врем€> (была SPDS_<штамп>); (2) найдена
+;;;        причина Ђсклеилось 5/6 из 7ї: GS создаЄт файл сразу, а
+;;;        дописывает ѕќ—Ћ≈ƒЌ»ћ Ч ожидание шло по первому по€влению
+;;;        файла, зритель открывал Ќ≈ƒќѕ»—јЌЌџ… альбом; теперь ждЄм
+;;;        стабилизации размера (3 одинаковых замера по 0.5 с);
+;;;        (3) в логе размер каждого входа (0 байт = выпавша€
+;;;        страница); (4) проверка альбома перед открытием Ч в LISP,
+;;;        нет файла -> открываетс€ папка сборки.
 ;;; v0.73: три правки открыти€/склейки: (1) расширение чертежа
 ;;;        отрезаетс€ по верной позиции (0.72 смотрел k-1 вместо
 ;;;        k-3 Ч в имени оставалось Ђ.dwgї); (2) перед склейкой
@@ -409,7 +418,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.73")
+(setq *psp-ver* "0.74")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1154,17 +1163,23 @@
 (defun psp-open-pdf (path dir / ok cmd dl)
   (setq dl (itoa (1+ *psp-open-delay-s*)))
   (princ (strcat " (открытие через ~" (itoa *psp-open-delay-s*) " с)"))
-  (setq cmd (strcat "ping -n " dl " 127.0.0.1 > nul"))
-  (if *psp-del-singles*
-    (setq cmd (strcat cmd " & del \"" dir "\\L*.pdf\"")))
-  ;; если альбома нет (сорван/удалЄн) Ч открыть хот€ бы папку
-  (setq cmd (strcat cmd " & if exist \"" path "\" (start \"\" \"" path
-                    "\") else (start \"\" \"" dir "\")"))
-  (setq ok (startapp "cmd.exe" (strcat "/c " cmd)))
-  (princ (strcat "[cmd=" (psp-s->str ok) "]"))
-  (if (null ok)
+  ;; проверка альбома в LISP (в момент фактического открыти€):
+  ;; нет файла Ч открываетс€ папка сборки, а не ничего
+  (if (findfile (psp-s->str path))
     (progn
-      (setq ok (startapp "explorer.exe" path))
+      (setq cmd (strcat "ping -n " dl " 127.0.0.1 > nul"))
+      (if *psp-del-singles*
+        (setq cmd (strcat cmd " & del \"" dir "\\L*.pdf\"")))
+      (setq cmd (strcat cmd " & start \"\" \"" path "\""))
+      (setq ok (startapp "cmd.exe" (strcat "/c " cmd)))
+      (princ (strcat "[cmd=" (psp-s->str ok) "]"))
+      (if (null ok)
+        (progn
+          (setq ok (startapp "explorer.exe" path))
+          (princ (strcat "[explorer=" (psp-s->str ok) "]")))))
+    (progn
+      (princ "\nѕ—ѕ: альбом не найден Ч открываю папку сборки.")
+      (setq ok (startapp "explorer.exe" dir))
       (princ (strcat "[explorer=" (psp-s->str ok) "]"))))
   ;; ¬тора€ волна: PDF-XChange держит ќ“ –џ“џ≈ листы (вкладки), Windows
   ;; не удал€ет зан€тые файлы (подтверждено диагностикой: при закрытом
@@ -1180,28 +1195,35 @@
                         " & del \"" dir "\\L*.pdf\" 2>nul)"))))
   ok)
 
-(defun psp-merge-pdfs (gs src-lst trg / cmd k s miss)
-  ;; диагностика: отсутствие входа Ч часта€ причина Ђсклеилось меньшеї
-  (setq miss nil)
+(defun psp-merge-pdfs (gs src-lst trg / cmd k s prev cur stable)
+  ;; диагностика: размер каждого входа (0 байт = страница выпадет)
   (foreach s src-lst
-    (if (not (findfile (psp-s->str s)))
-      (setq miss (cons (psp-s->str s) miss))))
-  (if miss
-    (foreach s miss (princ (strcat "\n  ѕ—ѕ: Ќ≈“ входного файла: " s))))
+    (princ (strcat "\n  вход " (psp-s->str s) ": "
+                   (if (findfile (psp-s->str s))
+                     (strcat (itoa (vl-file-size (psp-s->str s)))
+                             " байт")
+                     "Ќ≈“"))))
   (setq cmd (strcat "\"" (psp-s->str gs) "\""
                     " -dBATCH -dNOPAUSE -dSAFER -dQUIET -sDEVICE=pdfwrite"
                     " -sOutputFile=\"" (psp-s->str trg) "\""))
   (foreach s src-lst
     (setq cmd (strcat cmd " \"" (psp-s->str s) "\"")))
   (startapp cmd)
-  (setq k 0)
-  (while (and (not (findfile trg)) (< k 40))
+  ;; GS создаЄт файл —–ј«”, а дописывает последним: ждать не по€вле-
+  ;; ни€, а —“јЅ»Ћ»«ј÷»» размера (иначе зритель открывал недописан-
+  ;; ный альбом Ч Ђсклеилось 5/6 из 7ї)
+  (setq k 0 prev -1 cur -1 stable 0)
+  (while (and (< stable 3) (< k 60))
     (psp-sleep 500)
-    (setq k (1+ k)))
-  (if (findfile trg)
-    (princ (strcat "\n  размер альбома: "
-                   (itoa (vl-file-size (psp-s->str trg))) " байт")))
-  (findfile trg))
+    (setq cur (if (findfile trg)
+                (vl-file-size (psp-s->str trg)) -1))
+    (if (and (> cur 0) (= cur prev))
+      (setq stable (1+ stable))
+      (setq stable 0))
+    (setq prev cur k (1+ k)))
+  (if (> cur 0)
+    (princ (strcat "\n  размер альбома: " (itoa cur) " байт")))
+  (if (> cur 0) trg nil))
 
 ;; ---------------------------------------------------------------------------
 ;; —ѕƒ—: сортировка и имена
@@ -1343,22 +1365,19 @@
         (princ "\n” выбранных объектов нет габаритов Ч печатать нечего.")
         (princ))
        (t
-        ;; ѕапка сборки: %TEMP%\PlotFramePDF\SPDS_<дата>_<врем€>
+        ;; ѕапка сборки и альбом: <им€ чертежа>_<дата>_<врем€>
+        ;; (DWGNAME минус расширение; DWGTITLED Ч только флаг 0/1)
         (setq stamp (rtos (getvar "CDATE") 2 6)
-              dir (strcat (psp-output-dir)
-                          "\\SPDS_" (substr stamp 1 8)
-                          "_" (substr stamp 10 6)))
-        ;; »м€ альбома: <им€ чертежа>_<дата>_<врем€>.pdf
-        ;; DWGNAME Ч им€ файла (с расширением); DWGTITLED Ч только
-        ;; флаг 0/1 (ошибка 0.71: не-строка -> запасное ЂSPDSї)
-        (setq dwgn (getvar "DWGNAME"))
+              dwgn (getvar "DWGNAME"))
         (if (/= (type dwgn) 'STR) (setq dwgn ""))
         (setq k (strlen dwgn))
         ;; точка трЄхсимвольного расширени€ Ч на позиции k-3
-        ;; (0.72 смотрел на k-1 и не отрезал ".dwg")
         (if (and (> k 4) (= (substr dwgn (- k 3) 1) "."))
           (setq dwgn (substr dwgn 1 (- k 4))))
         (if (= dwgn "") (setq dwgn "SPDS"))
+        (setq dir (strcat (psp-output-dir)
+                          "\\" dwgn "_" (substr stamp 1 8)
+                          "_" (substr stamp 10 6)))
         (if (not (vl-file-directory-p dir)) (vl-mkdir dir))
         (princ (strcat "\nѕ—ѕ: папка сборки: " dir))
         (setq ctb (if *psp-color-mode* *psp-ctb-color* *psp-ctb-mono*))
