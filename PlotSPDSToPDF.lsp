@@ -49,7 +49,13 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 75
+;;; ћаркер редакции дл€ RELOAD: (ред. 76
+;;; v0.76: ѕ—ѕЌј—“–ќ… »: рамочка печати на принтер (FP-модуль
+;;;        Ё —¬ѕ‘ѕј4/Ё —¬ѕ‘ѕј3) Ч два выпадающих списка —»—“≈ћЌџ’
+;;;        принтеров Windows (реестр HKLM Control\Print\Printers,
+;;;        полный перечень; FinePrint добавлен, если отсутствует),
+;;;        отдельный дл€ A4 и дл€ A3; хранение AppData/PlotFrame/
+;;;        FPPrinterA4/A3, умолчание FinePrint.
 ;;; v0.75: папка сборки Ч просто <им€ чертежа> (без даты), альбом
 ;;;        внутри Ч по-прежнему <им€>_<дата>_<врем€>.pdf: повторные
 ;;;        сборки накапливаютс€ в одной папке, альбомы не затирают
@@ -422,7 +428,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.75")
+(setq *psp-ver* "0.76")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1654,6 +1660,31 @@
       (setq lst (cons cur lst))))
   lst)
 
+;; —писок —»—“≈ћЌџ’ принтеров Windows (дл€ FP-модул€): ключи
+;; HKLM\SYSTEM\CurrentControlSet\Control\Print\Printers;
+;; FinePrint добавл€етс€, если его нет; текущие значени€ тоже
+(defun psp-printer-list ( / lst s cur)
+  (setq lst (vl-catch-all-apply 'vl-registry-descendents
+              (list "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers")))
+  (if (not (listp lst)) (setq lst nil))
+  (setq s nil)
+  (foreach x lst
+    (if (and (= (type x) 'STR) (/= x "")
+             (not (member (strcase x T) (mapcar '(lambda (y) (strcase y T)) s))))
+      (setq s (cons x s))))
+  (setq s (vl-sort s (function (lambda (a b) (< (strcase a) (strcase b))))))
+  (if (not (member (strcase "FinePrint" T)
+                   (mapcar '(lambda (y) (strcase y T)) s)))
+    (setq s (cons "FinePrint" s)))
+  (foreach cur (list (getcfg "AppData/PlotFrame/FPPrinterA4")
+                     (getcfg "AppData/PlotFrame/FPPrinterA3"))
+    (if (and (= (type cur) 'STR) (/= cur "")
+             (not (member (strcase cur T)
+                          (mapcar '(lambda (y) (strcase y T)) s))))
+      (setq s (cons cur s))))
+  (if (null s) (setq s (list "FinePrint")))
+  s)
+
 ;; «аполнить выпадающий список и выбрать текущее значение
 (defun psp-popup-fill (key lst cur / idx s keep)
   ;; только строки; cur через psp-s->str: ошибка типа здесь не нужна
@@ -1706,6 +1737,12 @@
         *psp-t-ctbc*  (psp-str-or
                         (nth (atoi (get_tile "ctbc")) *psp-t-ctbs*)
                         "acad.ctb")
+        *psp-t-fpp4*  (psp-str-or
+                        (nth (atoi (get_tile "fpp4")) *psp-t-fpps*)
+                        "FinePrint")
+        *psp-t-fpp3*  (psp-str-or
+                        (nth (atoi (get_tile "fpp3")) *psp-t-fpps*)
+                        "FinePrint")
         *psp-t-thr*   (atoi (psp-s->str (get_tile "thr")))
         *psp-t-delay* (atoi (psp-s->str (get_tile "delay")))
         *psp-t-openres* (= (psp-s->str (get_tile "openres")) "1")
@@ -1733,6 +1770,8 @@
   (write-line "    : toggle { key = \"pcol\"; label = \"÷ветна€ печать (выкл = ч/б)\"; }" f)
   (write-line "    : popup_list { key = \"ctbm\"; label = \"CTB дл€ ч/б:\"; edit_width = 24; }" f)
   (write-line "    : popup_list { key = \"ctbc\"; label = \"CTB дл€ цвета:\"; edit_width = 24; }" f)
+  (write-line "    : popup_list { key = \"fpp4\"; label = \"A4 -> принтер:\"; edit_width = 30; }" f)
+  (write-line "    : popup_list { key = \"fpp3\"; label = \"A3 -> принтер:\"; edit_width = 30; }" f)
   (write-line "  }" f)
   (write-line "  : edit_box { key = \"thr\"; label = \"јвтосборка при листах ЅќЋ№Ў≈:\"; edit_width = 5; }" f)
   (write-line "  : edit_box { key = \"delay\"; label = \"«адержка открыти€, с:\"; edit_width = 5; }" f)
@@ -1774,6 +1813,13 @@
         (if *psp-ctb-mono* *psp-ctb-mono* "monochrome.ctb"))
       (psp-popup-fill "ctbc" *psp-t-ctbs*
         (if *psp-ctb-color* *psp-ctb-color* "acad.ctb"))
+      (setq *psp-t-fpps* (psp-printer-list))
+      (setq s (getcfg "AppData/PlotFrame/FPPrinterA4"))
+      (psp-popup-fill "fpp4" *psp-t-fpps*
+        (if (= (type s) 'STR) s "FinePrint"))
+      (setq s (getcfg "AppData/PlotFrame/FPPrinterA3"))
+      (psp-popup-fill "fpp3" *psp-t-fpps*
+        (if (= (type s) 'STR) s "FinePrint"))
       (set_tile "thr" (itoa *psp-auto-merge-n*))
       (set_tile "delay" (itoa *psp-open-delay-s*))
       (set_tile "openres" (if *psp-open-res* "1" "0"))
@@ -1818,6 +1864,11 @@
                   (if *psp-t-pcol* "1" "0"))
           (setcfg "AppData/PlotFrame/CtbMono" (psp-s->str *psp-t-ctbm*))
           (setcfg "AppData/PlotFrame/CtbColor" (psp-s->str *psp-t-ctbc*))
+          ;; ѕринтеры FP-модул€ (Ё —¬ѕ‘ѕј4 / Ё —¬ѕ‘ѕј3)
+          (setcfg "AppData/PlotFrame/FPPrinterA4"
+                  (psp-s->str *psp-t-fpp4*))
+          (setcfg "AppData/PlotFrame/FPPrinterA3"
+                  (psp-s->str *psp-t-fpp3*))
           ;; —ѕƒ— печатает по *psp-*, база Ч по *pfp-*: примен€ем к обоим
           (setq *psp-color-mode* *psp-t-pcol*
                 *psp-ctb-mono* *psp-t-ctbm*
