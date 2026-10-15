@@ -49,7 +49,10 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 71
+;;; ћаркер редакции дл€ RELOAD: (ред. 72
+;;; v0.72: им€ чертежа берЄтс€ из DWGNAME (с отрезанием расшире-
+;;;        ни€), а не DWGTITLED Ч тот есть флаг 0/1, из-за него
+;;;        0.71 всегда давал запасное ЂSPDSї.
 ;;; v0.71: склеенный альбом называетс€ <им€ чертежа>_<дата>_<врем€>
 ;;;        .pdf (DWGTITLED + штамп CDATE; несохранЄнный чертЄж Ч
 ;;;        ЂSPDSї). ѕапка сборки осталась SPDS_<дата>_<врем€> Ч под
@@ -399,7 +402,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.71")
+(setq *psp-ver* "0.72")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1327,8 +1330,13 @@
                           "\\SPDS_" (substr stamp 1 8)
                           "_" (substr stamp 10 6)))
         ;; »м€ альбома: <им€ чертежа>_<дата>_<врем€>.pdf
-        (setq dwgn (getvar "DWGTITLED"))
+        ;; DWGNAME Ч им€ файла (с расширением); DWGTITLED Ч только
+        ;; флаг 0/1 (ошибка 0.71: не-строка -> запасное ЂSPDSї)
+        (setq dwgn (getvar "DWGNAME"))
         (if (/= (type dwgn) 'STR) (setq dwgn ""))
+        (setq k (strlen dwgn))
+        (if (and (> k 4) (= (substr dwgn (1- k) 1) "."))
+          (setq dwgn (substr dwgn 1 (- k 4))))
         (if (= dwgn "") (setq dwgn "SPDS"))
         (if (not (vl-file-directory-p dir)) (vl-mkdir dir))
         (princ (strcat "\nѕ—ѕ: папка сборки: " dir))
