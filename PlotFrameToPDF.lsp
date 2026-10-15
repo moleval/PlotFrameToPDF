@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.25")
+(setq *pfp-ver* "3.26")
 ;; v3.18: Ђ_Asї-ошибка: ответ Ђ_Nї (не масштабировать веса линий)
 ;;        отправл€лс€ безусловно, но р€д сборок (в т.ч. ваша) вопрос
 ;;        Ђћасштабировать веса линий?ї не задаЄт Ч лента съезжала и
@@ -503,6 +503,13 @@
   (setq s-o (getcfg "AppData/PlotFrame/OutDir"))
   (if (= (type s-o) 'STR)
     (setq *pfp-output-dir* (if (/= s-o "") s-o nil)))
+  ;; ÷вет и CTB из ѕ—ѕЌј—“–ќ… » (задача 12)
+  (setq s-o (getcfg "AppData/PlotFrame/ColorMode"))
+  (if (= (type s-o) 'STR) (setq *pfp-color-mode* (= s-o "1")))
+  (setq s-o (getcfg "AppData/PlotFrame/CtbMono"))
+  (if (and (= (type s-o) 'STR) (/= s-o "")) (setq *pfp-ctb-mono* s-o))
+  (setq s-o (getcfg "AppData/PlotFrame/CtbColor"))
+  (if (and (= (type s-o) 'STR) (/= s-o "")) (setq *pfp-ctb-color* s-o))
   (setq old-cmdecho (getvar "CMDECHO"))
 
   ;; —брос возможного Ђхвостаї от предыдущих команд

@@ -49,7 +49,14 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 66
+;;; ћаркер редакции дл€ RELOAD: (ред. 67
+;;; v0.67: задача 12 Ч в ѕ—ѕЌј—“–ќ… » добавлена рамочка Ђ÷вет и
+;;;        стили печати (Ё —¬ѕƒ‘)ї под выбором принтера: переключатель
+;;;        ÷ветна€ печать (выкл = ч/б) и два выпадающих списка CTB
+;;;        (дл€ ч/б и дл€ цвета; все .ctb из папки стилей AutoCAD,
+;;;        PrinterStyleSheetDir; недоступна Ч monochrome/acad + теку-
+;;;        щие значени€). —охранение: AppData/PlotFrame/{ColorMode,
+;;;        CtbMono,CtbColor} + живое применение в загруженную базу.
 ;;; v0.66: задача 3 Ч портативный Ghostscript: в psp-find-gs добавле-
 ;;;        на страхова€ ветка GS[3.5] (<диск>:\PlotFrameToPDF\gs\bin
 ;;;        \gswin64c.exe, диски C:/D:/E:, папка провер€етс€ vl-file-
@@ -369,7 +376,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.66")
+(setq *psp-ver* "0.67")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -452,6 +459,13 @@
   (setq s (getcfg "AppData/PlotSPDS/PDFDir"))
   (if (and (= (type s) 'STR) (/= s ""))
     (setq *psp-pdf-dir* s *psp-output-dir* s))
+  ;; ѕараметры печати базы (задача 12): подхват при загрузке
+  (setq s (getcfg "AppData/PlotFrame/ColorMode"))
+  (if (= (type s) 'STR) (setq *pfp-color-mode* (= s "1")))
+  (setq s (getcfg "AppData/PlotFrame/CtbMono"))
+  (if (and (= (type s) 'STR) (/= s "")) (setq *pfp-ctb-mono* s))
+  (setq s (getcfg "AppData/PlotFrame/CtbColor"))
+  (if (and (= (type s) 'STR) (/= s "")) (setq *pfp-ctb-color* s))
   (setq s nil n (getcfg "AppData/PlotSPDS/AutoMergeN"))
   (if (= (type n) 'STR) (setq s (atoi n)))
   (if (and (numberp s) (> s 0)) (setq *psp-auto-merge-n* s))
@@ -1528,6 +1542,26 @@
     (setq lst (cons (if *psp-pc3* *psp-pc3* "PlotSPDSToPDF.pc3") lst)))
   lst)
 
+;; —писок CTB (стилей печати) из папки стилей AutoCAD
+(defun psp-ctb-list ( / d lst cur)
+  (setq d (getenv "PrinterStyleSheetDir"))
+  (if (= (type d) 'STR)
+    (progn
+      (setq lst (vl-catch-all-apply
+                  'vl-directory-files (list d "*.ctb" -1)))
+      (if (not (listp lst)) (setq lst nil))))
+  (if lst
+    (setq lst (vl-sort lst
+                (function (lambda (a b) (< (strcase a) (strcase b))))))
+    (setq lst (list "monochrome.ctb" "acad.ctb")))
+  (foreach cur (list (if (boundp '*pfp-ctb-mono*) *pfp-ctb-mono*)
+                     (if (boundp '*pfp-ctb-color*) *pfp-ctb-color*))
+    (if (and (= (type cur) 'STR) (/= cur "")
+             (not (member (strcase cur T)
+                          (mapcar '(lambda (x) (strcase x T)) lst))))
+      (setq lst (cons cur lst))))
+  lst)
+
 ;; «аполнить выпадающий список и выбрать текущее значение
 (defun psp-popup-fill (key lst cur / k idx)
   (start_list key)
@@ -1568,6 +1602,11 @@
   (setq *psp-t-dir*   (psp-s->str (get_tile "dir"))
         *psp-t-pc3*   (or (nth (atoi (get_tile "pc3list")) *psp-t-pc3s*)
                           *psp-pc3* "PlotSPDSToPDF.pc3")
+        *psp-t-pcol*  (= (psp-s->str (get_tile "pcol")) "1")
+        *psp-t-ctbm*  (or (nth (atoi (get_tile "ctbm")) *psp-t-ctbs*)
+                          "monochrome.ctb")
+        *psp-t-ctbc*  (or (nth (atoi (get_tile "ctbc")) *psp-t-ctbs*)
+                          "acad.ctb")
         *psp-t-thr*   (atoi (psp-s->str (get_tile "thr")))
         *psp-t-delay* (atoi (psp-s->str (get_tile "delay")))
         *psp-t-openres* (= (psp-s->str (get_tile "openres")) "1")
@@ -1591,6 +1630,11 @@
   (write-line "  }" f)
   (write-line "  : text { label = \"   (пусто = временна€ папка сборок)\"; }" f)
   (write-line "  : popup_list { key = \"pc3list\"; label = \"PDF-принтер (pc3):\"; edit_width = 34; }" f)
+  (write-line "  : boxed_column { label = \"÷вет и стили печати (Ё —¬ѕƒ‘)\";" f)
+  (write-line "    : toggle { key = \"pcol\"; label = \"÷ветна€ печать (выкл = ч/б)\"; }" f)
+  (write-line "    : popup_list { key = \"ctbm\"; label = \"CTB дл€ ч/б:\"; edit_width = 24; }" f)
+  (write-line "    : popup_list { key = \"ctbc\"; label = \"CTB дл€ цвета:\"; edit_width = 24; }" f)
+  (write-line "  }" f)
   (write-line "  : edit_box { key = \"thr\"; label = \"јвтосборка при листах ЅќЋ№Ў≈:\"; edit_width = 5; }" f)
   (write-line "  : edit_box { key = \"delay\"; label = \"«адержка открыти€, с:\"; edit_width = 5; }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"ќткрывать результат (склейку / одиночные)\"; }" f)
@@ -1623,6 +1667,15 @@
       (set_tile "dir" (if *psp-pdf-dir* *psp-pdf-dir* ""))
       (setq *psp-t-pc3s* (psp-pc3-list))
       (psp-popup-fill "pc3list" *psp-t-pc3s* *psp-pc3*)
+      (set_tile "pcol"
+        (if (and (boundp '*pfp-color-mode*) *pfp-color-mode*) "1" "0"))
+      (setq *psp-t-ctbs* (psp-ctb-list))
+      (psp-popup-fill "ctbm" *psp-t-ctbs*
+        (if (and (boundp '*pfp-ctb-mono*) *pfp-ctb-mono*)
+          *pfp-ctb-mono* "monochrome.ctb"))
+      (psp-popup-fill "ctbc" *psp-t-ctbs*
+        (if (and (boundp '*pfp-ctb-color*) *pfp-ctb-color*)
+          *pfp-ctb-color* "acad.ctb"))
       (set_tile "thr" (itoa *psp-auto-merge-n*))
       (set_tile "delay" (itoa *psp-open-delay-s*))
       (set_tile "openres" (if *psp-open-res* "1" "0"))
@@ -1654,6 +1707,16 @@
           (if (= s "") (setq s "PlotSPDSToPDF.pc3"))
           (setq *psp-pc3* s)
           (setcfg "AppData/PlotSPDS/PC3" s)
+          ;; ѕараметры печати базы (задача 12): цвет + CTB
+          (setcfg "AppData/PlotFrame/ColorMode"
+                  (if *psp-t-pcol* "1" "0"))
+          (setcfg "AppData/PlotFrame/CtbMono" *psp-t-ctbm*)
+          (setcfg "AppData/PlotFrame/CtbColor" *psp-t-ctbc*)
+          (if (boundp 'c:Ё —¬ѕƒ‘)
+            (progn
+              (setq *pfp-color-mode* *psp-t-pcol*)
+              (setq *pfp-ctb-mono* *psp-t-ctbm*)
+              (setq *pfp-ctb-color* *psp-t-ctbc*)))
           (setq n *psp-t-thr*)
           (if (< n 1) (setq n 1))
           (setq *psp-auto-merge-n* n)
