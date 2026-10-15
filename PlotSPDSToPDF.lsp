@@ -49,7 +49,14 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 72
+;;; ћаркер редакции дл€ RELOAD: (ред. 73
+;;; v0.73: три правки открыти€/склейки: (1) расширение чертежа
+;;;        отрезаетс€ по верной позиции (0.72 смотрел k-1 вместо
+;;;        k-3 Ч в имени оставалось Ђ.dwgї); (2) перед склейкой
+;;;        печатаетс€ список ќ“—”“—“¬”ёў»’ входов, после Ч размер
+;;;        альбома (диагностика Ђсклеилось меньше листовї);
+;;;        (3) если альбома нет в момент открыти€ Ч открываетс€
+;;;        папка сборки (вместо тишины).
 ;;; v0.72: им€ чертежа берЄтс€ из DWGNAME (с отрезанием расшире-
 ;;;        ни€), а не DWGTITLED Ч тот есть флаг 0/1, из-за него
 ;;;        0.71 всегда давал запасное ЂSPDSї.
@@ -402,7 +409,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.72")
+(setq *psp-ver* "0.73")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1150,7 +1157,9 @@
   (setq cmd (strcat "ping -n " dl " 127.0.0.1 > nul"))
   (if *psp-del-singles*
     (setq cmd (strcat cmd " & del \"" dir "\\L*.pdf\"")))
-  (setq cmd (strcat cmd " & start \"\" \"" path "\""))
+  ;; если альбома нет (сорван/удалЄн) Ч открыть хот€ бы папку
+  (setq cmd (strcat cmd " & if exist \"" path "\" (start \"\" \"" path
+                    "\") else (start \"\" \"" dir "\")"))
   (setq ok (startapp "cmd.exe" (strcat "/c " cmd)))
   (princ (strcat "[cmd=" (psp-s->str ok) "]"))
   (if (null ok)
@@ -1171,7 +1180,14 @@
                         " & del \"" dir "\\L*.pdf\" 2>nul)"))))
   ok)
 
-(defun psp-merge-pdfs (gs src-lst trg / cmd k s)
+(defun psp-merge-pdfs (gs src-lst trg / cmd k s miss)
+  ;; диагностика: отсутствие входа Ч часта€ причина Ђсклеилось меньшеї
+  (setq miss nil)
+  (foreach s src-lst
+    (if (not (findfile (psp-s->str s)))
+      (setq miss (cons (psp-s->str s) miss))))
+  (if miss
+    (foreach s miss (princ (strcat "\n  ѕ—ѕ: Ќ≈“ входного файла: " s))))
   (setq cmd (strcat "\"" (psp-s->str gs) "\""
                     " -dBATCH -dNOPAUSE -dSAFER -dQUIET -sDEVICE=pdfwrite"
                     " -sOutputFile=\"" (psp-s->str trg) "\""))
@@ -1182,6 +1198,9 @@
   (while (and (not (findfile trg)) (< k 40))
     (psp-sleep 500)
     (setq k (1+ k)))
+  (if (findfile trg)
+    (princ (strcat "\n  размер альбома: "
+                   (itoa (vl-file-size (psp-s->str trg))) " байт")))
   (findfile trg))
 
 ;; ---------------------------------------------------------------------------
@@ -1335,7 +1354,9 @@
         (setq dwgn (getvar "DWGNAME"))
         (if (/= (type dwgn) 'STR) (setq dwgn ""))
         (setq k (strlen dwgn))
-        (if (and (> k 4) (= (substr dwgn (1- k) 1) "."))
+        ;; точка трЄхсимвольного расширени€ Ч на позиции k-3
+        ;; (0.72 смотрел на k-1 и не отрезал ".dwg")
+        (if (and (> k 4) (= (substr dwgn (- k 3) 1) "."))
           (setq dwgn (substr dwgn 1 (- k 4))))
         (if (= dwgn "") (setq dwgn "SPDS"))
         (if (not (vl-file-directory-p dir)) (vl-mkdir dir))
