@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.23")
+(setq *pfp-ver* "3.24")
 ;; v3.18: «_As»-ошибка: ответ «_N» (не масштабировать веса линий)
 ;;        отправлялся безусловно, но ряд сборок (в т.ч. ваша) вопрос
 ;;        «Масштабировать веса линий?» не задаёт — лента съезжала и
@@ -481,7 +481,8 @@
                                    fmt media-name short-name orient-str rot-str
                                    n-obj ss-filter ctb-name
                                    old-trans has-trans old-bg old-paper
-                                   plot-tape old-cmdecho chk )
+                                   plot-tape old-cmdecho chk
+                                   attempt pdf-found )
 
   (setq has-trans
         (not (vl-catch-all-error-p
@@ -554,64 +555,74 @@
 
           ;; Предустановка формата: убирает лишний вопрос -ПЕЧАТЬ
           ;; на первой печати в файле (см. pfp-page-preset)
-          (setq chk (pfp-page-preset media-name))
-
-          ;; Печать через -PLOT.
-          ;; Наборы вопросов Модели и Листа РАЗЛИЧАЮТСЯ: у Модели нет
-          ;; вопросов «лист последним»/«удалять скрытые», но есть
-          ;; «Задать тонирование» (ответ — ключевое слово, не Да/Нет).
-          ;; Лента собирается по TILEMODE, иначе ответы «съезжают».
-          (setvar "CMDECHO" (if *pfp-plot-echo* 1 0))
-          (setq plot-tape
-            (append
-              (list "_.-plot"
-                    "_Y"                   ; подробная настройка
-                    ""                     ; текущий лист
-                    (if (and (= 1 (getvar "TILEMODE")) ; имя шлём только
-                             (= chk media-name))       ; если предустановка
-                      media-name)                      ; его приняла; иначе
-                                                       ; умолчание листа
-                    "_M"                   ; мм
-                    rot-str                ; ориентация _L / _P
-                    "_N"                   ; не переворачивать
-                    "_W"                   ; область: Рамка
-                    (list x1 y1)           ; нижний левый угол
-                    (list x2 y2)           ; верхний правый угол
-                    "_F"                   ; вписать
-                    "_C"                   ; центрировать
-                    "_Y"                   ; учитывать стили печати
-                    ctb-name               ; CTB-файл
-                    "_Y")                  ; учитывать веса линий
-              (if (= 1 (getvar "TILEMODE"))
-                ;; --- вкладка Модель ---
-                (append
-                  (if *pfp-tape-mode*      ; «Масштабировать веса?» задаёт
-                    (list "_N"))           ; не каждая сборка (см. ПФПЛЕНТА)
+          ;; Печать через -ПЛОТ, до двух попыток. Наборы вопросов
+          ;; Модели и Листа РАЗЛИЧАЮТСЯ; лента собирается по TILEMODE,
+          ;; иначе ответы «съезжают». В ленте недопустимы nil и про-
+          ;; пуски: каждый ответ — на свой вопрос (инцидент 3.22–3.23:
+          ;; выпала строка устройства). На Листе формат — всегда
+          ;; «Enter» (он уже предустановлен, лист хранит портретный
+          ;; канон); на Модели — факт предустановки (chk).
+          (setq attempt 0 pdf-found nil)
+          (while (and (< attempt 2) (not pdf-found))
+            (setq attempt (1+ attempt))
+            (setq chk (pfp-page-preset media-name))
+            (setvar "CMDECHO" (if *pfp-plot-echo* 1 0))
+            (setq plot-tape
+              (append
+                (list "_.-plot"
+                      "_Y"                 ; подробная настройка
+                      ""                   ; текущий лист
+                      "DWG To PDF.pc3"     ; устройство
+                      (cond                ; формат: nil недопустим
+                        ((= 1 (getvar "TILEMODE")) "") ;Лист: Enter
+                        ((= (type chk) 'STR) chk) ;факт предустановки
+                        (t media-name))
+                      "_M"                 ; мм
+                      rot-str              ; ориентация _L / _P
+                      "_N"                 ; не переворачивать
+                      "_W"                 ; область: Рамка
+                      (list x1 y1)         ; нижний левый угол
+                      (list x2 y2)         ; верхний правый угол
+                      "_F"                 ; вписать
+                      "_C"                 ; центрировать
+                      "_Y"                 ; учитывать стили печати
+                      ctb-name             ; CTB-файл
+                      "_Y")                ; учитывать веса линий
+                (if (= 1 (getvar "TILEMODE"))
+                  ;; --- вкладка Модель ---
+                  (append
+                    (if *pfp-tape-mode*    ; «Масштабировать веса?» задаёт
+                      (list "_N"))         ; не каждая сборка (см. ПФПЛЕНТА)
+                    (list
+                      "_As"                ; тонирование: по отображению
+                      fname-pdf            ; имя файла
+                      "_N"                 ; не сохранять в параметры
+                      "_Y"))               ; печатать
+                  ;; --- вкладка Лист ---
                   (list
-                    "_As"                  ; тонирование: по отображению
+                    "_N"                   ; масштабировать веса линий: нет
+                    "_N"                   ; не печатать лист последним
+                    "_N"                   ; не скрывать объекты листа
+                    "_N"                   ; НЕ записывать изменения в макет
                     fname-pdf              ; имя файла
                     "_N"                   ; не сохранять в параметры
-                    "_Y"))                 ; печатать
-                ;; --- вкладка Лист ---
-                (list
-                  "_N"                     ; масштабировать веса линий: нет
-                  "_N"                     ; не печатать лист последним
-                  "_N"                     ; не скрывать объекты листа
-                  "_N"                     ; НЕ записывать изменения в макет
-                  fname-pdf                ; имя файла
-                  "_N"                     ; не сохранять в параметры
-                  "_Y"))))                 ; печатать
-          (apply 'command plot-tape)
-          (setvar "CMDECHO" old-cmdecho)
-
-          ;; Дождаться полного завершения -PLOT
-          (while (> (getvar "CMDACTIVE") 0) (command))
+                    "_Y"))))               ; печатать
+            (apply 'command plot-tape)
+            (setvar "CMDECHO" old-cmdecho)
+            ;; Дождаться полного завершения -PLOT
+            (while (> (getvar "CMDACTIVE") 0) (command))
+            (pfp-page-restore)
+            (if (findfile (strcat fname-pdf ".pdf"))
+              (setq pdf-found T)
+              (if (< attempt 2)
+                (progn
+                  (pfp-clear-stuck)
+                  (princ "\nПФП: PDF не появился — повторная попытка...")))))
 
           (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" old-trans))
           (setvar "BACKGROUNDPLOT" old-bg)
           (if (not (vl-catch-all-error-p old-paper))
             (setvar "PAPERUPDATE" old-paper))
-          (pfp-page-restore)
 
           (setq fname-pdf
                 (cond ((findfile (strcat fname-pdf ".pdf"))
