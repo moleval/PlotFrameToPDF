@@ -49,7 +49,14 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 67
+;;; ћаркер редакции дл€ RELOAD: (ред. 68
+;;; v0.68: ѕ—ѕЌј—“–ќ… » не должна ломать печать: старт диалога и
+;;;        блок Ђѕрименитьї обЄрнуты в vl-catch-all-apply, unload_di-
+;;;        alog гарантирован при ЋёЅќћ исходе (живой диалог блокирует
+;;;        -ѕ≈„ј“№ Ч инцидент 0.67: Ђstringp Tї + 0 из 4 листов); сам
+;;;        текст ошибки печатаетс€ в консоль. psp-popup-fill игнори-
+;;;        рует не-строки; перечисление .pc3/.ctb переведено на флаг
+;;;        Ђтолько файлыї (1) Ч прежний -1 читал только ѕќƒѕјѕ ».
 ;;; v0.67: задача 12 Ч в ѕ—ѕЌј—“–ќ… » добавлена рамочка Ђ÷вет и
 ;;;        стили печати (Ё —¬ѕƒ‘)ї под выбором принтера: переключатель
 ;;;        ÷ветна€ печать (выкл = ч/б) и два выпадающих списка CTB
@@ -376,7 +383,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.67")
+(setq *psp-ver* "0.68")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1531,7 +1538,7 @@
   (if (= (type d) 'STR)
     (progn
       (setq lst (vl-catch-all-apply
-                  'vl-directory-files (list d "*.pc3" -1)))
+                  'vl-directory-files (list d "*.pc3" 1)))
       (if (not (listp lst)) (setq lst nil))))
   (if lst
     (setq lst (vl-sort lst
@@ -1548,7 +1555,7 @@
   (if (= (type d) 'STR)
     (progn
       (setq lst (vl-catch-all-apply
-                  'vl-directory-files (list d "*.ctb" -1)))
+                  'vl-directory-files (list d "*.ctb" 1)))
       (if (not (listp lst)) (setq lst nil))))
   (if lst
     (setq lst (vl-sort lst
@@ -1563,14 +1570,18 @@
   lst)
 
 ;; «аполнить выпадающий список и выбрать текущее значение
-(defun psp-popup-fill (key lst cur / k idx)
-  (start_list key)
-  (foreach s lst (add_list s))
-  (end_list)
-  (setq k 0 idx 0)
+(defun psp-popup-fill (key lst cur / idx s keep)
+  ;; только строки; cur через psp-s->str: ошибка типа здесь не нужна
+  (setq keep nil)
   (foreach s lst
-    (if (and (= idx 0) (= (strcase s T) (strcase cur T))) (setq idx k))
-    (setq k (1+ k)))
+    (if (= (type s) 'STR) (setq keep (cons s keep))))
+  (setq keep (reverse keep) cur (psp-s->str cur) idx 0)
+  (start_list key)
+  (foreach s keep (add_list s))
+  (end_list)
+  (while (and keep (/= (strcase (car keep) T) (strcase cur T)))
+    (setq keep (cdr keep) idx (1+ idx)))
+  (if (null keep) (setq idx 0))
   (set_tile key (itoa idx))
   (princ))
 
@@ -1620,7 +1631,7 @@
   (princ))
 
 ;; ƒиалог настроек (DCL генерируетс€ во временную папку при вызове)
-(defun psp-settings-dialog ( / f dcl d id s n)
+(defun psp-settings-dialog ( / f dcl d id s n res)
   (setq dcl (strcat (getenv "TEMP") "\\PlotSPDSToPDF_settings.dcl"))
   (setq f (open dcl "w"))
   (write-line "psp_set : dialog { label = \"PlotSPDSToPDF Ч настройки\";" f)
@@ -1692,6 +1703,11 @@
       (mode_tile "dir" 2)
       (action_tile "browse" "(psp-browse-folder)")
       (action_tile "ok" "(psp-tiles-read)(done_dialog 1)")
+      ;; ¬сЄ вплоть до конца Apply Ч под страховкой: ошибка Ќ≈ долж-
+      ;; на оставл€ть диалог открытым (живой диалог блокирует -ѕ≈„ј“№)
+      (setq res (vl-catch-all-apply
+                  '(lambda ( )
+                     (progn
       (setq id (start_dialog))
       (if (= id 1)
         (progn
@@ -1734,8 +1750,12 @@
           (setcfg "AppData/PlotFrame/Quality" (itoa *psp-t-pfq*))
           (if (boundp 'c:Ё —¬ѕƒ‘)
             (setq *pfp-quality* *psp-t-pfq*))
-          (princ "\nѕ—ѕ: настройки сохранены.")))))
+          (princ "\nѕ—ѕ: настройки сохранены.")))))))))
       (unload_dialog d)
+      (if (vl-catch-all-error-p res)
+        (progn
+          (princ "\nѕ—ѕ: ошибка диалога настроек: ")
+          (princ (vl-catch-all-error-message res))))
   (princ))
 
 (defun c:ѕ—ѕЌј—“–ќ… » () (psp-settings-dialog))
