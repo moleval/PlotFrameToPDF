@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.22")
+(setq *pfp-ver* "3.23")
 ;; v3.18: «_As»-ошибка: ответ «_N» (не масштабировать веса линий)
 ;;        отправлялся безусловно, но ряд сборок (в т.ч. ваша) вопрос
 ;;        «Масштабировать веса линий?» не задаёт — лента съезжала и
@@ -121,7 +121,11 @@
             (list (if (vl-catch-all-error-p cfg) nil cfg)
                   (if (vl-catch-all-error-p med) nil med)))
       (pfp-safe-put layout 'ConfigName "DWG To PDF.pc3")
-      (pfp-safe-put layout 'CanonicalMediaName media-name))))
+      (pfp-safe-put layout 'CanonicalMediaName media-name)
+      ;; Фактически принявшийся формат (лист/устройство могут от-
+      ;; вергнуть имя); лента шлёт имя только если оно подтвердилось.
+      (setq med (pfp-get layout 'CanonicalMediaName))
+      (if (vl-catch-all-error-p med) nil med))))
 
 ;; Восстановление устройства и формата листа после печати.
 (defun pfp-page-restore ( / doc layout)
@@ -477,7 +481,7 @@
                                    fmt media-name short-name orient-str rot-str
                                    n-obj ss-filter ctb-name
                                    old-trans has-trans old-bg old-paper
-                                   plot-tape old-cmdecho )
+                                   plot-tape old-cmdecho chk )
 
   (setq has-trans
         (not (vl-catch-all-error-p
@@ -550,7 +554,7 @@
 
           ;; Предустановка формата: убирает лишний вопрос -ПЕЧАТЬ
           ;; на первой печати в файле (см. pfp-page-preset)
-          (pfp-page-preset media-name)
+          (setq chk (pfp-page-preset media-name))
 
           ;; Печать через -PLOT.
           ;; Наборы вопросов Модели и Листа РАЗЛИЧАЮТСЯ: у Модели нет
@@ -563,10 +567,10 @@
               (list "_.-plot"
                     "_Y"                   ; подробная настройка
                     ""                     ; текущий лист
-                    (if (= 1 (getvar "TILEMODE")) ; на Листе формат уже
-                      ""                     ; предустановлен (pfp-page-
-                      media-name)            ; preset): альбомное имя не
-                                             ; совпадает с каноническим
+                    (if (and (= 1 (getvar "TILEMODE")) ; имя шлём только
+                             (= chk media-name))       ; если предустановка
+                      media-name)                      ; его приняла; иначе
+                                                       ; умолчание листа
                     "_M"                   ; мм
                     rot-str                ; ориентация _L / _P
                     "_N"                   ; не переворачивать

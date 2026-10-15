@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 62
+;;; Маркер редакции для RELOAD: (ред. 63
+;;; v0.63: имя формата шлётся в -ПЕЧАТЬ ТОЛЬКО когда предустановка
+;;;        (psp-page-preset, ActiveX) его реально приняла — теперь
+;;;        psp-page-preset ВОЗВРАЩАЕТ фактический CanonicalMediaName.
+;;;        Отвергнутое листом имя (альбомный канонический на Листе,
+;;;        отсутствующий размер) роняет -ПЕЧАТЬ; вместо него шлётся
+;;;        «Enter» — берётся фактический формат листа.
 ;;; v0.62: ПЕЧАТЬ С ВКЛАДКИ ЛИСТ починена: в ленте Листа 4 ответа
 ;;;        «Нет» перед именем файла (масштабировать веса / лист
 ;;;        последним / скрывать объекты листа / НЕ записывать изменения
@@ -344,7 +350,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.62")
+(setq *psp-ver* "0.63")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -529,7 +535,12 @@
             (list (if (vl-catch-all-error-p cfg) nil cfg)
                   (if (vl-catch-all-error-p med) nil med)))
       (psp-safe-put layout 'ConfigName *psp-pc3*)
-      (psp-safe-put layout 'CanonicalMediaName media-name))))
+      (psp-safe-put layout 'CanonicalMediaName media-name)
+      ;; Читаем ФАКТИЧЕСКИ принявшийся формат: лист/устройство могут
+      ;; отвергнуть имя (например, альбомный канонический на Листе).
+      ;; Лента сверяется с фактом (см. psp-plot-tape).
+      (setq med (psp-get layout 'CanonicalMediaName))
+      (if (vl-catch-all-error-p med) nil med))))
 
 (defun psp-page-restore ( / doc layout)
   (if *psp-page-saved*
@@ -556,7 +567,7 @@
 ;; вопросов «лист последним»/«удалять скрытые», но есть «Задать
 ;; тонирование» (ответ — ключевое слово). Лента собирается по TILEMODE.
 (defun psp-plot-tape (fname media-name rot-str ctb x1 y1 x2 y2
-                      / tape old-cmdecho)
+                      media-chk / tape old-cmdecho)
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" (if *psp-plot-echo* 1 0))
   (setq tape
@@ -565,10 +576,12 @@
             "_Y"                     ; подробная настройка
             ""                       ; текущий лист
             *psp-pc3*                ; устройство
-            (if (= 1 (getvar "TILEMODE")) ; на Листе формат уже предуст-
-              ""                       ;ановлен; альбомные размеры в ка-
-              media-name)              ;ноническому имени не совпадают и
-                                       ;вызовут смену формата (срыв ленты)
+            (if (and (= 1 (getvar "TILEMODE")) ; имя формата шлём ТОЛЬКО
+                     (= media-chk media-name)) ;если предустановка его
+              media-name)              ;реально приняла (иначе на Листе
+                                       ;умолчание: отвергнутое имя роняет
+                                       ;-ПЕЧАТЬ; несовпадение канонических
+                                       ;имён Модель/Лист неfatal)
             "_M"                     ; мм
             rot-str                  ; ориентация _L / _P
             "_N"                     ; не переворачивать
@@ -1309,7 +1322,7 @@
           (setq *psp-stage* "печать листа")
           (setq res (vl-catch-all-apply 'psp-plot-tape
                       (list (strcat fname ".pdf") media rot-str ctb
-                            x1 y1 x2 y2)))
+                            x1 y1 x2 y2 chk)))
           (psp-page-restore)
           ;; Если -ПЕЧАТЬ застряла на незапланированном вопросе, в стеке
           ;; остаётся CMDACTIVE; его остатки сдвинули бы следующую ленту.
