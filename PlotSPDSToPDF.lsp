@@ -49,7 +49,11 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 70
+;;; ћаркер редакции дл€ RELOAD: (ред. 71
+;;; v0.71: склеенный альбом называетс€ <им€ чертежа>_<дата>_<врем€>
+;;;        .pdf (DWGTITLED + штамп CDATE; несохранЄнный чертЄж Ч
+;;;        ЂSPDSї). ѕапка сборки осталась SPDS_<дата>_<врем€> Ч под
+;;;        маску удалени€ L*.pdf альбом не попадает, как и раньше.
 ;;; v0.70: ÷¬≈“ ≈ƒ»Ќџ… ƒЋя ќЅќ»’: рамочка задачи 12 раньше писала
 ;;;        только *pfp-* (база), а —ѕƒ— печатает по *psp-color-mode*/
 ;;;        *psp-ctb-* Ч оставалс€ ч/б. “еперь Apply примен€ет к обоим
@@ -395,7 +399,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.70")
+(setq *psp-ver* "0.71")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1133,7 +1137,8 @@
 ;; удаление листов выполн€ютс€ с задержкой ~5 с (ping) в ќ“ƒ≈Ћ№Ќќћ
 ;; фоновом cmd Ч AutoCAD не ждЄт, gs успевает закрыть файлы.
 ;; ќдиночные листы удал€ютс€ ќƒЌќ… командой с маской dir\L*.pdf:
-;; в папке сборки только наши листы, альбом начинаетс€ с "SPDS_".
+;; в папке сборки только листы L*.pdf; альбом называетс€
+;; <им€ чертежа>_<дата>_<врем€>.pdf Ч под маску L*.pdf не попадает.
 ;; ÷епочка из отдельных del на каждый лист (0.42) не сработала Ч
 ;; слишком длинна€ команда. «апасной путь Ч explorer (без удалени€).
 (defun psp-open-pdf (path dir / ok cmd dl)
@@ -1272,7 +1277,8 @@
                           bb used rec media rot-str ctb dir stamp fname
                           nm-n w h x1 y1 x2 y2 ok-list skip j row flds mult multv
                           old-bg old-paper old-trans has-trans res
-                          merge-list gs ans merged pdfs k chk auto-merge)
+                          merge-list gs ans merged pdfs k chk auto-merge
+                          dwgn)
   (princ "\nЁкспорт форматов —ѕƒ— в PDF. ¬ыберите объекты (или All).")
   (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
   (cond
@@ -1320,6 +1326,10 @@
               dir (strcat (psp-output-dir)
                           "\\SPDS_" (substr stamp 1 8)
                           "_" (substr stamp 10 6)))
+        ;; »м€ альбома: <им€ чертежа>_<дата>_<врем€>.pdf
+        (setq dwgn (getvar "DWGTITLED"))
+        (if (/= (type dwgn) 'STR) (setq dwgn ""))
+        (if (= dwgn "") (setq dwgn "SPDS"))
         (if (not (vl-file-directory-p dir)) (vl-mkdir dir))
         (princ (strcat "\nѕ—ѕ: папка сборки: " dir))
         (setq ctb (if *psp-color-mode* *psp-ctb-color* *psp-ctb-mono*))
@@ -1495,8 +1505,9 @@
                 (setq pdfs (mapcar
                              '(lambda (f) (strcat dir "\\" f))
                              (reverse merge-list))
-                      merged (strcat dir "\\"
-                                     (psp-file-base dir) ".pdf"))
+                      merged (strcat dir "\\" dwgn "_"
+                                     (substr stamp 1 8) "_"
+                                     (substr stamp 10 6) ".pdf"))
                 (princ (strcat "\nѕ—ѕ: склеиваю " (itoa (length pdfs))
                                " листов (Ghostscript)..."))
                 (princ (strcat "\n  gs=" (psp-s->str gs)))
