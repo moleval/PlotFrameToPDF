@@ -25,7 +25,7 @@
 
 (vl-load-com)
 
-(setq *pfp-ver* "3.24")
+(setq *pfp-ver* "3.25")
 ;; v3.18: «_As»-ошибка: ответ «_N» (не масштабировать веса линий)
 ;;        отправлялся безусловно, но ряд сборок (в т.ч. ваша) вопрос
 ;;        «Масштабировать веса линий?» не задаёт — лента съезжала и
@@ -482,7 +482,7 @@
                                    n-obj ss-filter ctb-name
                                    old-trans has-trans old-bg old-paper
                                    plot-tape old-cmdecho chk
-                                   attempt pdf-found )
+                                   attempt pdf-found plot-err )
 
   (setq has-trans
         (not (vl-catch-all-error-p
@@ -599,15 +599,18 @@
                       "_N"                 ; не сохранять в параметры
                       "_Y"))               ; печатать
                   ;; --- вкладка Лист ---
-                  (list
-                    "_N"                   ; масштабировать веса линий: нет
-                    "_N"                   ; не печатать лист последним
-                    "_N"                   ; не скрывать объекты листа
-                    "_N"                   ; НЕ записывать изменения в макет
-                    fname-pdf              ; имя файла
-                    "_N"                   ; не сохранять в параметры
-                    "_Y"))))               ; печатать
-            (apply 'command plot-tape)
+                  ;; Три «Нет» (масштабировать веса / печатать лист
+                  ;; первым / скрывать объекты листа); «записать изме-
+                  ;; нения в макет» спрашивается не всегда (зависит от
+                  ;; состояния листа) — её закрывает вторая попытка
+                  ;; с четвёртым «Нет». После имени: не сохранять,
+                  ;; печатать.
+                  (append
+                    (list "_N" "_N" "_N")
+                    (if (= attempt 2) (list "_N"))
+                    (list fname-pdf "_N" "_Y")))))
+            (setq plot-err
+                  (vl-catch-all-apply 'apply (list 'command plot-tape)))
             (setvar "CMDECHO" old-cmdecho)
             ;; Дождаться полного завершения -PLOT
             (while (> (getvar "CMDACTIVE") 0) (command))
@@ -616,8 +619,10 @@
               (setq pdf-found T)
               (if (< attempt 2)
                 (progn
-                  (pfp-clear-stuck)
-                  (princ "\nПФП: PDF не появился — повторная попытка...")))))
+                  (if (vl-catch-all-error-p plot-err)
+                    (princ "\nПФП: лента печати сорвалась — вторая попытка (плюс «Нет» на «записать изменения»).")
+                    (princ "\nПФП: PDF не появился — повторная попытка..."))
+                  (pfp-clear-stuck)))))
 
           (if has-trans (setvar "PLOTTRANSPARENCYOVERRIDE" old-trans))
           (setvar "BACKGROUNDPLOT" old-bg)
