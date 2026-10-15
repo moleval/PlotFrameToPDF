@@ -49,7 +49,13 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 69
+;;; ћаркер редакции дл€ RELOAD: (ред. 70
+;;; v0.70: ÷¬≈“ ≈ƒ»Ќџ… ƒЋя ќЅќ»’: рамочка задачи 12 раньше писала
+;;;        только *pfp-* (база), а —ѕƒ— печатает по *psp-color-mode*/
+;;;        *psp-ctb-* Ч оставалс€ ч/б. “еперь Apply примен€ет к обоим
+;;;        пространствам, load-cfg подхватывает в оба, диалог читает
+;;;        из *psp-* (всегда объ€влены). ќдин источник Ч реестр
+;;;        AppData/PlotFrame/{ColorMode,CtbMono,CtbColor}.
 ;;; v0.69: реестр отравлен частичным Apply 0.67 (PC3="T" Ч в баннере
 ;;;        Ђѕринтер: Tї): PC3 теперь принимаетс€/сохран€етс€ “ќЋ№ ќ
 ;;;        при маске *.pc3; все *psp-t-* читаютс€ через строгую
@@ -389,7 +395,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.69")
+(setq *psp-ver* "0.70")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -472,13 +478,17 @@
   (setq s (getcfg "AppData/PlotSPDS/PDFDir"))
   (if (and (= (type s) 'STR) (/= s ""))
     (setq *psp-pdf-dir* s *psp-output-dir* s))
-  ;; ѕараметры печати базы (задача 12): подхват при загрузке
+  ;; ѕараметры печати (задача 12): подхват в ќЅј модул€
+  ;; (—ѕƒ— печатает по *psp-*, база Ч по *pfp-*)
   (setq s (getcfg "AppData/PlotFrame/ColorMode"))
-  (if (= (type s) 'STR) (setq *pfp-color-mode* (= s "1")))
+  (if (= (type s) 'STR)
+    (setq *pfp-color-mode* (= s "1") *psp-color-mode* (= s "1")))
   (setq s (getcfg "AppData/PlotFrame/CtbMono"))
-  (if (and (= (type s) 'STR) (/= s "")) (setq *pfp-ctb-mono* s))
+  (if (and (= (type s) 'STR) (/= s ""))
+    (setq *pfp-ctb-mono* s *psp-ctb-mono* s))
   (setq s (getcfg "AppData/PlotFrame/CtbColor"))
-  (if (and (= (type s) 'STR) (/= s "")) (setq *pfp-ctb-color* s))
+  (if (and (= (type s) 'STR) (/= s ""))
+    (setq *pfp-ctb-color* s *psp-ctb-color* s))
   (setq s nil n (getcfg "AppData/PlotSPDS/AutoMergeN"))
   (if (= (type n) 'STR) (setq s (atoi n)))
   (if (and (numberp s) (> s 0)) (setq *psp-auto-merge-n* s))
@@ -1695,14 +1705,12 @@
       (setq *psp-t-pc3s* (psp-pc3-list))
       (psp-popup-fill "pc3list" *psp-t-pc3s* *psp-pc3*)
       (set_tile "pcol"
-        (if (and (boundp '*pfp-color-mode*) *pfp-color-mode*) "1" "0"))
+        (if *psp-color-mode* "1" "0"))
       (setq *psp-t-ctbs* (psp-ctb-list))
       (psp-popup-fill "ctbm" *psp-t-ctbs*
-        (if (and (boundp '*pfp-ctb-mono*) *pfp-ctb-mono*)
-          *pfp-ctb-mono* "monochrome.ctb"))
+        (if *psp-ctb-mono* *psp-ctb-mono* "monochrome.ctb"))
       (psp-popup-fill "ctbc" *psp-t-ctbs*
-        (if (and (boundp '*pfp-ctb-color*) *pfp-ctb-color*)
-          *pfp-ctb-color* "acad.ctb"))
+        (if *psp-ctb-color* *psp-ctb-color* "acad.ctb"))
       (set_tile "thr" (itoa *psp-auto-merge-n*))
       (set_tile "delay" (itoa *psp-open-delay-s*))
       (set_tile "openres" (if *psp-open-res* "1" "0"))
@@ -1747,6 +1755,10 @@
                   (if *psp-t-pcol* "1" "0"))
           (setcfg "AppData/PlotFrame/CtbMono" (psp-s->str *psp-t-ctbm*))
           (setcfg "AppData/PlotFrame/CtbColor" (psp-s->str *psp-t-ctbc*))
+          ;; —ѕƒ— печатает по *psp-*, база Ч по *pfp-*: примен€ем к обоим
+          (setq *psp-color-mode* *psp-t-pcol*
+                *psp-ctb-mono* *psp-t-ctbm*
+                *psp-ctb-color* *psp-t-ctbc*)
           (if (boundp 'c:Ё —¬ѕƒ‘)
             (progn
               (setq *pfp-color-mode* *psp-t-pcol*)
