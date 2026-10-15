@@ -49,7 +49,10 @@
 ;;;        ƒиагностика разбита на Ќ≈— ќЋ№ ќ верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними Ч следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменЄн на €вную сумму.
-;;; ћаркер редакции дл€ RELOAD: (ред. 76
+;;; ћаркер редакции дл€ RELOAD: (ред. 77
+;;; v0.77: умолчание списков FP-принтеров: пустое значение реестра
+;;;        (= отсутствующий ключ) больше не выбирает первый принтер
+;;;        списка Ч всегда FinePrint.
 ;;; v0.76: ѕ—ѕЌј—“–ќ… »: рамочка печати на принтер (FP-модуль
 ;;;        Ё —¬ѕ‘ѕј4/Ё —¬ѕ‘ѕј3) Ч два выпадающих списка —»—“≈ћЌџ’
 ;;;        принтеров Windows (реестр HKLM Control\Print\Printers,
@@ -428,7 +431,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.76")
+(setq *psp-ver* "0.77")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1816,10 +1819,10 @@
       (setq *psp-t-fpps* (psp-printer-list))
       (setq s (getcfg "AppData/PlotFrame/FPPrinterA4"))
       (psp-popup-fill "fpp4" *psp-t-fpps*
-        (if (= (type s) 'STR) s "FinePrint"))
+        (if (and (= (type s) 'STR) (/= s "")) s "FinePrint"))
       (setq s (getcfg "AppData/PlotFrame/FPPrinterA3"))
       (psp-popup-fill "fpp3" *psp-t-fpps*
-        (if (= (type s) 'STR) s "FinePrint"))
+        (if (and (= (type s) 'STR) (/= s "")) s "FinePrint"))
       (set_tile "thr" (itoa *psp-auto-merge-n*))
       (set_tile "delay" (itoa *psp-open-delay-s*))
       (set_tile "openres" (if *psp-open-res* "1" "0"))
