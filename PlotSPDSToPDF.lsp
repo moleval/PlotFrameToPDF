@@ -49,7 +49,11 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 77
+;;; Маркер редакции для RELOAD: (ред. 78
+;;; v0.78: после «настройки сохранены» в консоль печатается список
+;;;        применённых параметров: папка, PDF-принтер, цвет+CTB,
+;;;        принтеры FP (A4/A3), автосборка, задержка, открытие,
+;;;        удаление, качество СПДС и рамки.
 ;;; v0.77: умолчание списков FP-принтеров: пустое значение реестра
 ;;;        (= отсутствующий ключ) больше не выбирает первый принтер
 ;;;        списка — всегда FinePrint.
@@ -431,7 +435,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.77")
+(setq *psp-ver* "0.78")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1898,7 +1902,34 @@
           (setcfg "AppData/PlotFrame/Quality" (itoa *psp-t-pfq*))
           (if (boundp 'c:ЭКСВПДФ)
             (setq *pfp-quality* *psp-t-pfq*))
-          (princ "\nПСП: настройки сохранены.")))))))))
+          (princ "\nПСП: настройки сохранены. Применено:")
+          (princ (strcat "\n  папка: "
+                         (if (= *psp-pdf-dir* "")
+                           "%TEMP%\\PlotFramePDF"
+                           *psp-pdf-dir*)))
+          (princ (strcat "\n  PDF-принтер (СПДС): " *psp-pc3*))
+          (princ (strcat "\n  печать: "
+                         (if *psp-color-mode* "цвет" "ч/б")
+                         " (CTB "
+                         (if *psp-color-mode*
+                           *psp-ctb-color* *psp-ctb-mono*)
+                         ")"))
+          (princ (strcat "\n  принтер A4: " (psp-s->str *psp-t-fpp4*)
+                         " | принтер A3: " (psp-s->str *psp-t-fpp3*)))
+          (princ (strcat "\n  автосборка: >" (itoa *psp-auto-merge-n*)
+                         " листов | задержка: "
+                         (itoa *psp-open-delay-s*) " с"))
+          (princ (strcat "\n  открывать результат: "
+                         (if *psp-open-res* "да" "нет")
+                         " | удалять одиночные: "
+                         (if *psp-del-singles* "да" "нет")))
+          (princ (strcat "\n  качество СПДС: "
+                         (nth *psp-quality*
+                              (list "Низкое" "Среднее" "Высокое"))
+                         " | качество рамки: "
+                         (nth *psp-t-pfq*
+                              (list "Низкое" "Среднее" "Высокое"))))
+          ))))))))
       (unload_dialog d)
       (if (vl-catch-all-error-p res)
         (progn
