@@ -1,17 +1,22 @@
 ;;; ============================================================
-;;; PlotFrame.lsp v1.02 — МОНОЛИТ (экспериментальная сборка
-;;; трёх модулей одним файлом; ранее файл назывался
-;;; PlotFrameBundle.lsp). Загружать ВМЕСТО трёх старых файлов
-;;; из archive/, НЕ вместе с ними: имена команд те же.
+;;; PlotFrame.lsp v1.03 — МОНОЛИТ (сборка трёх модулей + фаза 2;
+;;; ранее файл назывался PlotFrameBundle.lsp). Загружать ВМЕСТО
+;;; трёх старых файлов из archive/, НЕ вместе с ними: имена
+;;; команд те же.
 ;;;   секция 1: PlotSPDSToPDF.lsp  v0.85 (СПДС -> PDF, ПСПНАСТРОЙКИ)
 ;;;   секция 2: PlotFrameToPDF.lsp v3.27 (рамки -> PDF, ЭКСВПДФ)
 ;;;   секция 3: PlotFrameToFP.lsp  v1.03 (рамки -> принтер, ЭКСВПФПА4/A3)
+;;;   секция 4: ЭКССПДСВФП — форматы СПДС на системный принтер
+;;; v1.03: секция 4 — ЭКССПДСВФП: формат рамки СПДС решает принтер
+;;;        (A4 -> «Принтер A4», A3+ -> «Принтер A3»), ориентация
+;;;        как у рамки, масштаб всегда «Вписать»; кратность X2/X3
+;;;        поднимает формат; принтеры из ПСПНАСТРОЙКИ.
 ;;; v1.02: переименование PlotFrameBundle.lsp -> PlotFrame.lsp
 ;;;        (внутренняя переменная *pfb-ver* -> *pf-ver*).
 ;;; v1.01: FP-секция обновлена до 1.03 (баннер версии).
 ;;; ============================================================
-(setq *pf-ver* "1.02")
-(princ "\nЗагружено: PlotFrame.lsp v1.02 — монолит (СПДС 0.85 + рамки 3.27 + принтер 1.03).")
+(setq *pf-ver* "1.03")
+(princ "\nЗагружено: PlotFrame.lsp v1.03 — монолит (СПДС 0.85 + рамки 3.27 + принтер 1.03 + СПДС-на-принтер ЭКССПДСВФП).")
 (princ "\nФП/ПСП/ПФП: файлы из archive/ в этом чертеже НЕ загружать — команды те же.")
 
 ;;; -*- coding: windows-1251 -*-
@@ -3110,3 +3115,187 @@
 (princ "\nЗагружено: PlotFrameToFP.lsp v1.03 — команды: ЭКСВПФПА4 / EXPTFPA4 (A4), ЭКСВПФПА3 / EXPTFPA3 (A3).")
 (princ "\nФП: принтеры для A4 и A3 задаются в ПСПНАСТРОЙКИ (умолчание FinePrint).")
 (princ)
+
+
+;;; ============================================================
+;;; секция 4: ЭКССПДСВФП (фаза 2) — форматы СПДС на СИСТЕМНЫЙ
+;;; принтер. Формат РАМКИ СПДС решает, куда печатать:
+;;;   A4          -> «Принтер A4» (ПСПНАСТРОЙКИ), бумага A4
+;;;   A3 и выше   -> «Принтер A3» (ПСПНАСТРОЙКИ), бумага A3
+;;; Ориентация — как у рамки; масштаб — всегда «Вписать»
+;;; (A4/A3 печатаются вписанными в бумагу, крупные ужимаются).
+;;; Кратность рамки (A4X2/A4X3) поднимает формат по шагам
+;;; (A4X2 -> A3). Ничего не сохраняется/не склеивается/не
+;;; открывается/не удаляется — бумага выходит из принтера.
+;;; Диагностика: общие ФПЭХОВКЛ / ФПЭХОВЫКЛ (лента та же).
+;;; ============================================================
+
+;; Принтер из настроек ПСПНАСТРОЙКИ (пустое значение = FinePrint)
+(defun psp-fp-printer (key / s)
+  (setq s (getcfg key))
+  (if (and (= (type s) 'STR) (/= s "")) s "FinePrint"))
+
+;; Эффективный формат рамки: номинал формата СПДС; кратность
+;; X2/X3 поднимает формат по шагам (A4X2 -> A3, A4X3 -> A2).
+(defun psp-fp-frame-format (fmt / p base mult)
+  (setq p (psp-spds-parse (psp-spds-norm fmt)))
+  (if p
+    (progn
+      (setq base (nth 0 p) mult (nth 1 p))
+      (while (> mult 1)
+        (setq base (nth 0 (psp-spds-size-up base)) mult (1- mult)))
+      base)
+    nil))
+
+;; Лента печати на системный принтер — дословно лента FP 1.03
+;; (формат не посылается: бумага предустановлена psp-page-preset)
+(defun psp-fp-plot-tape (printer rot ctb x1 y1 x2 y2 / old-cmdecho)
+  (setq old-cmdecho (getvar "CMDECHO"))
+  (setvar "CMDECHO" (if *fp-plot-echo* 1 0))
+  (command "_.-plot"
+            "_Y"
+            ""
+            printer
+            ""
+            "_M"
+            rot
+            "_N"
+            "_W"
+            (list x1 y1)
+            (list x2 y2)
+            "_F"
+            "_C"
+            "_Y"
+            ctb
+            "_Y")
+  (if (= 1 (getvar "TILEMODE"))
+    (command "_As" "_N" "" "_Y")
+    (command "_N" "_N" "_N" "_N" "" "_Y"))
+  (setvar "CMDECHO" old-cmdecho))
+
+(defun c:ЭКССПДСВФП ( / ss n i ent obj it items fmt sheet sheet-i bb
+                        w h fname fmtbase paper printer rot ctb x1 y1 x2 y2
+                        nm-n used ok-list skip j row p4a p3a res stuck
+                        old-bg old-paper)
+  (princ "\nЭкспорт форматов СПДС на принтер. Выберите объекты (или All).")
+  (setq ss (ssget (list (cons 0 *psp-spds-entity*))))
+  (cond
+    ((null ss) (princ "\nОтменено.") (princ))
+    (t
+     (setq n (sslength ss) i 0 items nil skip nil)
+     (princ (strcat "\nПСП: выбрано объектов: " (itoa n)))
+     (while (< i n)
+       (setq ent (ssname ss i))
+       (setq obj (vlax-ename->vla-object ent))
+       (setq flds (psp-spds-fields ent))
+       (setq fmt (psp-field flds "Format"))
+       (if (null fmt)
+         (setq fmt (psp-spds-prop obj *psp-spds-props-format*)))
+       (setq sheet (psp-field flds "Sheet"))
+       (if (null sheet)
+         (setq sheet (psp-spds-prop obj *psp-spds-props-sheet*)))
+       (setq sheet-i (psp-sheet-num sheet))
+       (setq bb (psp-spds-bbox obj))
+       (if bb
+         (setq items
+               (cons (list ent obj fmt
+                           (if (psp-sheet-p sheet) sheet-i 9999.0)
+                           (car bb) (cadr bb) (caddr bb) (cadddr bb)
+                           sheet)
+                     items))
+         (setq skip (cons (cdr (assoc 5 (entget ent))) skip)))
+       (setq i (1+ i)))
+     (setq items (psp-spds-sorted (reverse items)))
+     (princ (strcat "\nПСП: к печати после сортировки: " (itoa (length items))))
+     (cond
+       ((null items)
+        (princ "\nУ выбранных объектов нет габаритов — печатать нечего.")
+        (princ))
+       (t
+        (setq p4a (psp-fp-printer "AppData/PlotFrame/FPPrinterA4")
+              p3a (psp-fp-printer "AppData/PlotFrame/FPPrinterA3")
+              ctb (if *psp-color-mode* *psp-ctb-color* *psp-ctb-mono*))
+        (princ (strcat "\nПСП: принтер A4: " p4a " | принтер A3+: " p3a
+                       " | печать: " (if *psp-color-mode* "цвет" "ч/б")
+                       " (" ctb ") | масштаб: Вписать"))
+        (setq old-bg (getvar "BACKGROUNDPLOT")
+              old-paper (vl-catch-all-apply
+                          '(lambda ( ) (getvar "PAPERUPDATE"))))
+        (setvar "BACKGROUNDPLOT" 0)
+        (if (not (vl-catch-all-error-p old-paper))
+          (setvar "PAPERUPDATE" 0))
+        (setq used nil ok-list nil j 0)
+        (foreach it items
+          (setq w (- (nth 6 it) (nth 4 it))
+                h (- (nth 7 it) (nth 5 it))
+                fmtbase (if (nth 2 it)
+                          (psp-fp-frame-format (nth 2 it))
+                          nil)
+                paper (if (= fmtbase "A4") "A4" "A3")
+                printer (if (= fmtbase "A4") p4a p3a)
+                rot (if (>= w h) "_L" "_P")
+                nm-n (psp-spds-uniq
+                       (if (nth 8 it)
+                         (psp-sheet-name (nth 8 it))
+                         (strcat "L" (psp-pad2 (1+ j))))
+                       used)
+                used (cadr nm-n))
+          (princ (strcat "\n  ПСП: " (car nm-n)
+                         " (" (if (nth 2 it) (nth 2 it) "?")
+                         " -> " paper " на " printer ")"))
+          (setq res (vl-catch-all-apply 'psp-page-preset (list paper)))
+          (if (vl-catch-all-error-p res)
+            (princ (strcat "\n  ПСП: предустановка ОШИБКА: "
+                           (vl-catch-all-error-message res))))
+          (setq x1 (car (trans (list (nth 4 it) (nth 5 it)) 0 1))
+                y1 (cadr (trans (list (nth 4 it) (nth 5 it)) 0 1))
+                x2 (car (trans (list (nth 6 it) (nth 7 it)) 0 1))
+                y2 (cadr (trans (list (nth 6 it) (nth 7 it)) 0 1)))
+          (setq stuck nil)
+          (psp-fp-plot-tape printer rot ctb x1 y1 x2 y2)
+          (psp-page-restore)
+          (if (> (getvar "CMDACTIVE") 0)
+            (progn
+              (princ "\n  ПСП: -ПЕЧАТЬ застряла — вторая попытка.")
+              (psp-clear-stuck)
+              (psp-page-preset paper)
+              (psp-fp-plot-tape printer rot ctb x1 y1 x2 y2)
+              (psp-page-restore)
+              (if (> (getvar "CMDACTIVE") 0)
+                (progn
+                  (princ "\n  ПСП: повторно застряла — лист пропущен.")
+                  (psp-clear-stuck)
+                  (setq stuck T)))))
+          (if stuck
+            (setq skip (cons (car nm-n) skip))
+            (setq ok-list
+                  (cons (list (car nm-n)
+                              (if (nth 2 it) (nth 2 it) "?")
+                              paper printer)
+                        ok-list)))
+          (setq j (1+ j)))
+        (setvar "BACKGROUNDPLOT" old-bg)
+        (if (not (vl-catch-all-error-p old-paper))
+          (setvar "PAPERUPDATE" old-paper))
+        (setq ok-list (reverse ok-list))
+        (princ "\nПечать СПДС на принтер:")
+        (princ "\n  | лист   | формат СПДС | бумага | принтер            |")
+        (princ "\n  |--------|-------------|--------|--------------------|")
+        (foreach row ok-list
+          (princ (strcat "\n  | "
+                         (psp-pad-right (nth 0 row) 6) " | "
+                         (psp-pad-right (nth 1 row) 11) " | "
+                         (psp-pad-right (nth 2 row) 6) " | "
+                         (nth 3 row) " |")))
+        (princ (strcat "\nГотово: " (itoa (length ok-list))
+                       " из " (itoa (length items))
+                       (if skip
+                         (strcat "; пропущено: "
+                                 (itoa (length skip)))
+                         "")))
+        (princ))))
+     )
+  (princ))
+
+;; Английский псевдоним ЭКССПДСВФП
+(defun c:EXPSPDSTOFP () (c:ЭКССПДСВФП))
