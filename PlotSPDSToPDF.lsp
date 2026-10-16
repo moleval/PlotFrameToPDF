@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 80
+;;; Маркер редакции для RELOAD: (ред. 81
+;;; v0.81: таблица настроек — С ЯЧЕЙКАМИ (вертикальный разделитель
+;;;        «|», «+» на стыке). В окне строки «CTB для ч/б/цвета»
+;;;        переименованы в «Чёрно-белая печать» / «Цветная печать»;
+;;;        сетка: правый край всех полей по одной линии — списки 30,
+;;;        поля автосборки/задержки 30, папка(21)+Обзор(9) = 30.
 ;;; v0.80: окно «Настройки печати» переработано: сетка — подписи
 ;;;        30 знаков вправо, все списки шириной 30; принтеры PDF/A4/
 ;;;        A3 одной колонкой; «Цветная печать (выкл=ч/б)» заменена
@@ -446,7 +451,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.80")
+(setq *psp-ver* "0.81")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1773,8 +1778,8 @@
   (write-line "psp_set : dialog { label = \"Настройки печати\";" f)
   (write-line "  : row {" f)
   (write-line "    : text { label = \"Папка сохранения:\"; width = 30; fixed_width = true; alignment = right; }" f)
-  (write-line "    : edit_box { key = \"dir\"; edit_width = 24; fixed_width = true; }" f)
-  (write-line "    : button { key = \"browse\"; label = \"Обзор...\"; }" f)
+  (write-line "    : edit_box { key = \"dir\"; edit_width = 21; fixed_width = true; }" f)
+  (write-line "    : button { key = \"browse\"; label = \"Обзор...\"; width = 9; fixed_width = true; }" f)
   (write-line "  }" f)
   (write-line "  : text { label = \"   (пусто = временная папка сборок)\"; }" f)
   (write-line "  : boxed_column { label = \"Цвет и стили печати\";" f)
@@ -1795,21 +1800,21 @@
   (write-line "      : radio_button { key = \"mcol\"; label = \"Цветная печать\"; }" f)
   (write-line "    }" f)
   (write-line "    : row {" f)
-  (write-line "      : text { label = \"CTB для ч/б:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : text { label = \"Чёрно-белая печать:\"; width = 30; fixed_width = true; alignment = right; }" f)
   (write-line "      : popup_list { key = \"ctbm\"; width = 30; fixed_width = true; }" f)
   (write-line "    }" f)
   (write-line "    : row {" f)
-  (write-line "      : text { label = \"CTB для цвета:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : text { label = \"Цветная печать:\"; width = 30; fixed_width = true; alignment = right; }" f)
   (write-line "      : popup_list { key = \"ctbc\"; width = 30; fixed_width = true; }" f)
   (write-line "    }" f)
   (write-line "  }" f)
   (write-line "  : row {" f)
   (write-line "    : text { label = \"Автосборка при листах БОЛЬШЕ:\"; width = 30; fixed_width = true; alignment = right; }" f)
-  (write-line "    : edit_box { key = \"thr\"; edit_width = 5; fixed_width = true; }" f)
+  (write-line "    : edit_box { key = \"thr\"; edit_width = 30; fixed_width = true; }" f)
   (write-line "  }" f)
   (write-line "  : row {" f)
   (write-line "    : text { label = \"Задержка открытия, с:\"; width = 30; fixed_width = true; alignment = right; }" f)
-  (write-line "    : edit_box { key = \"delay\"; edit_width = 5; fixed_width = true; }" f)
+  (write-line "    : edit_box { key = \"delay\"; edit_width = 30; fixed_width = true; }" f)
   (write-line "  }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"Открывать результат (склейку / одиночные)\"; }" f)
   (write-line "  : toggle { key = \"dels\"; label = \"Удалять одиночные листы после склейки\"; }" f)
@@ -1933,19 +1938,20 @@
             (setq *pfp-quality* *psp-t-pfq*))
           (princ "\nПСП: настройки сохранены. Применено:")
           (princ (strcat "\n  " (psp-pad-right "параметр" 30)
-                         "значение"))
+                         "| значение"))
           (princ (strcat "\n  " (psp-pad-right "---------" 30)
-                         "-----------------------------------"))
+                         "+------------------------------------"))
           (defun psp-row (n v)
-            (princ (strcat "\n  " (psp-pad-right n 30) (psp-s->str v))))
+            (princ (strcat "\n  " (psp-pad-right n 30)
+                           "| " (psp-s->str v))))
           (psp-row "папка сохранения"
                    (if (= *psp-pdf-dir* "")
                      "%TEMP%\\PlotFramePDF" *psp-pdf-dir*))
           (psp-row "PDF-принтер (СПДС)" *psp-pc3*)
           (psp-row "цвет печати"
                    (if *psp-color-mode* "цвет" "ч/б"))
-          (psp-row "CTB для ч/б" *psp-ctb-mono*)
-          (psp-row "CTB для цвета" *psp-ctb-color*)
+          (psp-row "Чёрно-белая печать (CTB)" *psp-ctb-mono*)
+          (psp-row "Цветная печать (CTB)" *psp-ctb-color*)
           (psp-row "принтер для A4 (FP)" *psp-t-fpp4*)
           (psp-row "принтер для A3 (FP)" *psp-t-fpp3*)
           (psp-row "автосборка в один PDF"
