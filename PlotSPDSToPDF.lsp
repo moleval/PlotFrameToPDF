@@ -49,7 +49,13 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 79
+;;; Маркер редакции для RELOAD: (ред. 80
+;;; v0.80: окно «Настройки печати» переработано: сетка — подписи
+;;;        30 знаков вправо, все списки шириной 30; принтеры PDF/A4/
+;;;        A3 одной колонкой; «Цветная печать (выкл=ч/б)» заменена
+;;;        парой радио «Чёрно-белая печать»/«Цветная печать»; рамки
+;;;        качества переименованы («Качество печати "Рамка в PDF"…»);
+;;;        «Низкое (формат в формат)» -> «Низкое (по формату)».
 ;;; v0.79: чат «секция N/10 загружена» УБРАН: успешная загрузка —
 ;;;        один баннер «Загружено: …», ошибка — AutoCAD печатает сам
 ;;;        у проблемной формы. Отчёт настроек после «Применить» —
@@ -440,7 +446,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.79")
+(setq *psp-ver* "0.80")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1733,7 +1739,7 @@
         *psp-t-pc3*   (psp-str-or
                         (nth (atoi (get_tile "pc3list")) *psp-t-pc3s*)
                         (psp-str-or *psp-pc3* "PlotSPDSToPDF.pc3"))
-        *psp-t-pcol*  (= (psp-s->str (get_tile "pcol")) "1")
+        *psp-t-pcol*  (= (psp-s->str (get_tile "mcol")) "1")
         *psp-t-ctbm*  (psp-str-or
                         (nth (atoi (get_tile "ctbm")) *psp-t-ctbs*)
                         "monochrome.ctb")
@@ -1762,34 +1768,61 @@
 (defun psp-settings-dialog ( / f dcl d id s n res st)
   (setq dcl (strcat (getenv "TEMP") "\\PlotSPDSToPDF_settings.dcl"))
   (setq f (open dcl "w"))
-  (write-line "psp_set : dialog { label = \"PlotSPDSToPDF — настройки\";" f)
+  ;; v0.80: сетка — каждая строка = [текст 30, вправо][поле 30];
+  ;; принтеры PDF/A4/A3 — сверху одной колонкой; цвет — пара радио
+  (write-line "psp_set : dialog { label = \"Настройки печати\";" f)
   (write-line "  : row {" f)
-  (write-line "    : edit_box { key = \"dir\"; label = \"Папка сохранения:\"; edit_width = 36; }" f)
+  (write-line "    : text { label = \"Папка сохранения:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "    : edit_box { key = \"dir\"; edit_width = 24; fixed_width = true; }" f)
   (write-line "    : button { key = \"browse\"; label = \"Обзор...\"; }" f)
   (write-line "  }" f)
   (write-line "  : text { label = \"   (пусто = временная папка сборок)\"; }" f)
-  (write-line "  : popup_list { key = \"pc3list\"; label = \"PDF-принтер (pc3):\"; edit_width = 34; }" f)
-  (write-line "  : boxed_column { label = \"Цвет и стили печати (ЭКСВПДФ)\";" f)
-  (write-line "    : toggle { key = \"pcol\"; label = \"Цветная печать (выкл = ч/б)\"; }" f)
-  (write-line "    : popup_list { key = \"ctbm\"; label = \"CTB для ч/б:\"; edit_width = 24; }" f)
-  (write-line "    : popup_list { key = \"ctbc\"; label = \"CTB для цвета:\"; edit_width = 24; }" f)
-  (write-line "    : popup_list { key = \"fpp4\"; label = \"A4 -> принтер:\"; edit_width = 30; }" f)
-  (write-line "    : popup_list { key = \"fpp3\"; label = \"A3 -> принтер:\"; edit_width = 30; }" f)
+  (write-line "  : boxed_column { label = \"Цвет и стили печати\";" f)
+  (write-line "    : row {" f)
+  (write-line "      : text { label = \"Принтер PDF:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : popup_list { key = \"pc3list\"; width = 30; fixed_width = true; }" f)
+  (write-line "    }" f)
+  (write-line "    : row {" f)
+  (write-line "      : text { label = \"Принтер A4:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : popup_list { key = \"fpp4\"; width = 30; fixed_width = true; }" f)
+  (write-line "    }" f)
+  (write-line "    : row {" f)
+  (write-line "      : text { label = \"Принтер A3:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : popup_list { key = \"fpp3\"; width = 30; fixed_width = true; }" f)
+  (write-line "    }" f)
+  (write-line "    : radio_column {" f)
+  (write-line "      : radio_button { key = \"cmb\"; label = \"Чёрно-белая печать\"; }" f)
+  (write-line "      : radio_button { key = \"mcol\"; label = \"Цветная печать\"; }" f)
+  (write-line "    }" f)
+  (write-line "    : row {" f)
+  (write-line "      : text { label = \"CTB для ч/б:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : popup_list { key = \"ctbm\"; width = 30; fixed_width = true; }" f)
+  (write-line "    }" f)
+  (write-line "    : row {" f)
+  (write-line "      : text { label = \"CTB для цвета:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "      : popup_list { key = \"ctbc\"; width = 30; fixed_width = true; }" f)
+  (write-line "    }" f)
   (write-line "  }" f)
-  (write-line "  : edit_box { key = \"thr\"; label = \"Автосборка при листах БОЛЬШЕ:\"; edit_width = 5; }" f)
-  (write-line "  : edit_box { key = \"delay\"; label = \"Задержка открытия, с:\"; edit_width = 5; }" f)
+  (write-line "  : row {" f)
+  (write-line "    : text { label = \"Автосборка при листах БОЛЬШЕ:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "    : edit_box { key = \"thr\"; edit_width = 5; fixed_width = true; }" f)
+  (write-line "  }" f)
+  (write-line "  : row {" f)
+  (write-line "    : text { label = \"Задержка открытия, с:\"; width = 30; fixed_width = true; alignment = right; }" f)
+  (write-line "    : edit_box { key = \"delay\"; edit_width = 5; fixed_width = true; }" f)
+  (write-line "  }" f)
   (write-line "  : toggle { key = \"openres\"; label = \"Открывать результат (склейку / одиночные)\"; }" f)
   (write-line "  : toggle { key = \"dels\"; label = \"Удалять одиночные листы после склейки\"; }" f)
-  (write-line "  : boxed_column { label = \"Рамочка в PDF (ЭКСВПДФ)\";" f)
+  (write-line "  : boxed_column { label = \"Качество печати \\\"Рамка в PDF\\\" (ЭКСВПДФ)\";" f)
   (write-line "    : radio_row {" f)
   (write-line "      : radio_button { key = \"rq0\"; label = \"Низкое (авто -1)\"; }" f)
   (write-line "      : radio_button { key = \"rq1\"; label = \"Среднее (авто)\"; }" f)
   (write-line "      : radio_button { key = \"rq2\"; label = \"Высокое (авто +1)\"; }" f)
   (write-line "    }" f)
   (write-line "  }" f)
-  (write-line "  : boxed_column { label = \"Формат СПДС в PDF (ЭКССПДСВПДФ)\";" f)
+  (write-line "  : boxed_column { label = \"Качество печати \\\"Рамка СПДС в PDF\\\" (ЭКССПДСВПДФ)\";" f)
   (write-line "    : radio_row {" f)
-  (write-line "      : radio_button { key = \"q0\"; label = \"Низкое (формат в формат)\"; }" f)
+  (write-line "      : radio_button { key = \"q0\"; label = \"Низкое (по формату)\"; }" f)
   (write-line "      : radio_button { key = \"q1\"; label = \"Среднее (+1)\"; }" f)
   (write-line "      : radio_button { key = \"q2\"; label = \"Высокое (+2)\"; }" f)
   (write-line "    }" f)
@@ -1809,8 +1842,8 @@
       (set_tile "dir" (psp-s->str (if *psp-pdf-dir* *psp-pdf-dir* "")))
       (setq *psp-t-pc3s* (psp-pc3-list))
       (psp-popup-fill "pc3list" *psp-t-pc3s* *psp-pc3*)
-      (set_tile "pcol"
-        (if *psp-color-mode* "1" "0"))
+      (set_tile "cmb" (if *psp-color-mode* "0" "1"))
+      (set_tile "mcol" (if *psp-color-mode* "1" "0"))
       (setq *psp-t-ctbs* (psp-ctb-list))
       (psp-popup-fill "ctbm" *psp-t-ctbs*
         (if *psp-ctb-mono* *psp-ctb-mono* "monochrome.ctb"))
