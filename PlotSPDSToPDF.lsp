@@ -49,7 +49,12 @@
 ;;;        Диагностика разбита на НЕСКОЛЬКО верхнеуровневых функций
 ;;;        с маркерами 8a/8b/8c между ними — следующий сбой укажет
 ;;;        подблок точно. (apply '+ ...) заменён на явную сумму.
-;;; Маркер редакции для RELOAD: (ред. 82
+;;; Маркер редакции для RELOAD: (ред. 83
+;;; v0.83: поле пути — на всю внутреннюю ширину рамки (60, метка
+;;;        «Папка:» убрана — есть заголовок рамки). Радиокнопки ка-
+;;;        чества — вертикальной колонкой в обеих рамках, подписи
+;;;        рамки в PDF без «авто»: «Низкое (-1) / Среднее / Высо-
+;;;        кое (+1)» — колонки обеих рамок выровнены по вертикали.
 ;;; v0.82: окно — всё в рамках с единой сеткой (подписи 30 вправо,
 ;;;        поля 30): блок 1 «Папка сохранения» (строка 2 = подсказка
 ;;;        + «Обзор...»), блок 2 «Сборка и результат» (автосборка,
@@ -457,7 +462,7 @@
 
 (vl-load-com)
 
-(setq *psp-ver* "0.82")
+(setq *psp-ver* "0.83")
 
 (setq *psp-open-mode* "rundll")
 (setq *psp-open-delay* 300)
@@ -1783,10 +1788,7 @@
   ;; принтеры PDF/A4/A3 — сверху одной колонкой; цвет — пара радио
   (write-line "psp_set : dialog { label = \"Настройки печати\";" f)
   (write-line "  : boxed_column { label = \"Папка сохранения\";" f)
-  (write-line "    : row {" f)
-  (write-line "      : text { label = \"Папка:\"; width = 30; fixed_width = true; alignment = right; }" f)
-  (write-line "      : edit_box { key = \"dir\"; edit_width = 30; fixed_width = true; }" f)
-  (write-line "    }" f)
+  (write-line "    : edit_box { key = \"dir\"; edit_width = 60; fixed_width = true; }" f)
   (write-line "    : row {" f)
   (write-line "      : text { label = \"(пусто = временная папка сборок)\"; }" f)
   (write-line "      : button { key = \"browse\"; label = \"Обзор...\"; width = 10; fixed_width = true; }" f)
@@ -1831,14 +1833,14 @@
   (write-line "    : toggle { key = \"dels\"; label = \"Удалять одиночные листы после склейки\"; }" f)
   (write-line "  }" f)
   (write-line "  : boxed_column { label = \"Качество печати \\\"Рамка в PDF\\\" (ЭКСВПДФ)\";" f)
-  (write-line "    : radio_row {" f)
-  (write-line "      : radio_button { key = \"rq0\"; label = \"Низкое (авто -1)\"; }" f)
-  (write-line "      : radio_button { key = \"rq1\"; label = \"Среднее (авто)\"; }" f)
-  (write-line "      : radio_button { key = \"rq2\"; label = \"Высокое (авто +1)\"; }" f)
+  (write-line "    : radio_column {" f)
+  (write-line "      : radio_button { key = \"rq0\"; label = \"Низкое (-1)\"; }" f)
+  (write-line "      : radio_button { key = \"rq1\"; label = \"Среднее\"; }" f)
+  (write-line "      : radio_button { key = \"rq2\"; label = \"Высокое (+1)\"; }" f)
   (write-line "    }" f)
   (write-line "  }" f)
   (write-line "  : boxed_column { label = \"Качество печати \\\"Рамка СПДС в PDF\\\" (ЭКССПДСВПДФ)\";" f)
-  (write-line "    : radio_row {" f)
+  (write-line "    : radio_column {" f)
   (write-line "      : radio_button { key = \"q0\"; label = \"Низкое (по формату)\"; }" f)
   (write-line "      : radio_button { key = \"q1\"; label = \"Среднее (+1)\"; }" f)
   (write-line "      : radio_button { key = \"q2\"; label = \"Высокое (+2)\"; }" f)
