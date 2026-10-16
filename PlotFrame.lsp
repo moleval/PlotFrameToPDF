@@ -1,5 +1,5 @@
 ;;; ============================================================
-;;; PlotFrame.lsp v1.08 — МОНОЛИТ (сборка трёх модулей + фаза 2;
+;;; PlotFrame.lsp v1.09 — МОНОЛИТ (сборка трёх модулей + фаза 2;
 ;;; ранее файл назывался PlotFrameBundle.lsp). Загружать ВМЕСТО
 ;;; трёх старых файлов из archive/, НЕ вместе с ними: имена
 ;;; команд те же.
@@ -7,6 +7,15 @@
 ;;;   секция 2: PlotFrameToPDF.lsp v3.27 (рамки -> PDF, ЭКСПДФ)
 ;;;   секция 3: PlotFrameToFP.lsp  v1.03 (рамки -> принтер, ЭКСФПА4/A3)
 ;;;   секция 4: ЭКССПДСФП — форматы СПДС на системный принтер
+;;; v1.09: ПСПНАСТРОЙКИ, Apply: убраны три guard-проверки
+;;;        (boundp 'c:ЭКСПДФ) — легаси трёхфайловой эпохи; в моноли-
+;;;        те секция базы загружена всегда, поэтому *pfp-* перемен-
+;;;        ные (папка, цвет+CTB, качество) применяются БЕЗУСЛОВНО
+;;;        теми же значениями. Причина: CHKALL ругался на цитиро-
+;;;        ванный не-ANSI-символ 'c:ЭКСПДФ вне defun (строки
+;;;        1980/2001/2021). Поведение Apply не менялось (guard все-
+;;;        гда был истинен). ОТКАТ: вернуть три (if (boundp …) …)
+;;;        и удалить три безусловных setq *pfp-*.
 ;;; v1.08: баннеры секций («Загружено: PlotSPDSToPDF/…/FP»)
 ;;;        УБРАНЫ — при загрузке печатается только баннер монолита;
 ;;;        при сбое AutoCAD сам печатает ошибку у проблемной формы.
@@ -39,8 +48,8 @@
 ;;;        (внутренняя переменная *pfb-ver* -> *pf-ver*).
 ;;; v1.01: FP-секция обновлена до 1.03 (баннер версии).
 ;;; ============================================================
-(setq *pf-ver* "1.08")
-(princ "\nЗагружено: PlotFrame.lsp v1.08 — печать рамок и форматов СПДС.")
+(setq *pf-ver* "1.09")
+(princ "\nЗагружено: PlotFrame.lsp v1.09 — печать рамок и форматов СПДС.")
 (princ "\nОсновные команды:")
 (princ "\n  +--------------------------------------------------------------+")
 (princ "\n  | КОМАНДА                  | ЧТО ДЕЛАЕТ                        |")
@@ -1977,8 +1986,7 @@
           (setq *psp-pdf-dir* s *psp-output-dir* (if (/= s "") s nil))
           (setcfg "AppData/PlotSPDS/PDFDir" s)
           (setcfg "AppData/PlotFrame/OutDir" s)
-          (if (boundp 'c:ЭКСПДФ)
-            (setq *pfp-output-dir* (if (/= s "") s nil)))
+          (setq *pfp-output-dir* (if (/= s "") s nil))
           (setq s (psp-s->str *psp-t-pc3*))
           (if (not (wcmatch (strcase s T) "*`.pc3"))
             (setq s "PlotSPDSToPDF.pc3"))
@@ -1998,11 +2006,9 @@
           (setq *psp-color-mode* *psp-t-pcol*
                 *psp-ctb-mono* *psp-t-ctbm*
                 *psp-ctb-color* *psp-t-ctbc*)
-          (if (boundp 'c:ЭКСПДФ)
-            (progn
-              (setq *pfp-color-mode* *psp-t-pcol*)
-              (setq *pfp-ctb-mono* *psp-t-ctbm*)
-              (setq *pfp-ctb-color* *psp-t-ctbc*)))
+          (setq *pfp-color-mode* *psp-t-pcol*
+                *pfp-ctb-mono* *psp-t-ctbm*
+                *pfp-ctb-color* *psp-t-ctbc*)
           (setq n *psp-t-thr*)
           (if (< n 1) (setq n 1))
           (setq *psp-auto-merge-n* n)
@@ -2018,8 +2024,7 @@
           (setq *psp-quality* *psp-t-quality*)
           (setcfg "AppData/PlotSPDS/Quality" (itoa *psp-quality*))
           (setcfg "AppData/PlotFrame/Quality" (itoa *psp-t-pfq*))
-          (if (boundp 'c:ЭКСПДФ)
-            (setq *pfp-quality* *psp-t-pfq*))
+          (setq *pfp-quality* *psp-t-pfq*)
           (princ "\nПСП: настройки сохранены. Применено:")
           (princ "\n  +-----------------------------+-----------------------------------+")
           (princ (strcat "\n  | " (psp-pad-right "параметр" 28)
