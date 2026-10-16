@@ -1,5 +1,5 @@
 ;;; ============================================================
-;;; PlotFrame.lsp v1.03 — МОНОЛИТ (сборка трёх модулей + фаза 2;
+;;; PlotFrame.lsp v1.04 — МОНОЛИТ (сборка трёх модулей + фаза 2;
 ;;; ранее файл назывался PlotFrameBundle.lsp). Загружать ВМЕСТО
 ;;; трёх старых файлов из archive/, НЕ вместе с ними: имена
 ;;; команд те же.
@@ -7,6 +7,13 @@
 ;;;   секция 2: PlotFrameToPDF.lsp v3.27 (рамки -> PDF, ЭКСВПДФ)
 ;;;   секция 3: PlotFrameToFP.lsp  v1.03 (рамки -> принтер, ЭКСВПФПА4/A3)
 ;;;   секция 4: ЭКССПДСВФП — форматы СПДС на системный принтер
+;;; v1.04: ЭКССПДСВФП: предустановка бумаги по механике FP —
+;;;        ConfigName = системный принтер, CanonicalMediaName =
+;;;        A4/A3 с readback и поиском по списку бумаг драйвера;
+;;;        печать результата («предустановка: <имя>»). Причина:
+;;;        старый вызов psp-page-preset ставил PDF-принтер и имя
+;;;        «A3», которого у него нет -> бумага листа оставалась
+;;;        A4 -> A3-рамка печаталась вписанной в A4.
 ;;; v1.03: секция 4 — ЭКССПДСВФП: формат рамки СПДС решает принтер
 ;;;        (A4 -> «Принтер A4», A3+ -> «Принтер A3»), ориентация
 ;;;        как у рамки, масштаб всегда «Вписать»; кратность X2/X3
@@ -15,8 +22,8 @@
 ;;;        (внутренняя переменная *pfb-ver* -> *pf-ver*).
 ;;; v1.01: FP-секция обновлена до 1.03 (баннер версии).
 ;;; ============================================================
-(setq *pf-ver* "1.03")
-(princ "\nЗагружено: PlotFrame.lsp v1.03 — монолит (СПДС 0.85 + рамки 3.27 + принтер 1.03 + СПДС-на-принтер ЭКССПДСВФП).")
+(setq *pf-ver* "1.04")
+(princ "\nЗагружено: PlotFrame.lsp v1.04 — монолит (СПДС 0.85 + рамки 3.27 + принтер 1.03 + СПДС-на-принтер ЭКССПДСВФП).")
 (princ "\nФП/ПСП/ПФП: файлы из archive/ в этом чертеже НЕ загружать — команды те же.")
 
 ;;; -*- coding: windows-1251 -*-
@@ -3147,6 +3154,49 @@
       base)
     nil))
 
+;; Предустановка бумаги СИСТЕМНОГО принтера активному листу
+;; (механика FP: ConfigName = принтер, CanonicalMediaName = A4/A3
+;; с readback; если драйвер отверг имя — ищем его бумагу по маске
+;; в списке бумаг драйвера). Прежние устройство/бумага сохраняются
+;; в *psp-page-saved* — восстановление штатным psp-page-restore.
+;; Возвращает фактическое имя бумаги или nil.
+(defun psp-fp-preset (printer fmt / doc layout cfg med names found)
+  (setq *psp-page-saved* nil)
+  (setq doc (psp-get (vlax-get-acad-object) 'ActiveDocument))
+  (setq layout (psp-get doc 'ActiveLayout))
+  (if (or (null layout) (vl-catch-all-error-p layout))
+    nil
+    (progn
+      (setq cfg (psp-get layout 'ConfigName)
+            med (psp-get layout 'CanonicalMediaName))
+      (setq *psp-page-saved*
+            (list (if (vl-catch-all-error-p cfg) nil cfg)
+                  (if (vl-catch-all-error-p med) nil med)))
+      (psp-safe-put layout 'ConfigName printer)
+      (psp-safe-put layout 'CanonicalMediaName fmt)
+      (setq med (psp-get layout 'CanonicalMediaName))
+      (if (or (vl-catch-all-error-p med)
+              (not (wcmatch (strcase (if (= (type med) 'STR) med ""))
+                            (strcat (strcase fmt) "*"))))
+        (progn
+          (setq names (vl-catch-all-apply
+                        '(lambda ( )
+                           (vlax-invoke layout 'GetCanonicalMediaNames))))
+          (if (and (not (vl-catch-all-error-p names))
+                   (= (type names) 'LIST))
+            (progn
+              (setq found nil)
+              (foreach nm names
+                (if (and (null found)
+                         (= (type nm) 'STR)
+                         (wcmatch (strcase nm)
+                                  (strcat "*" (strcase fmt) "*")))
+                  (setq found nm)))
+              (if found
+                (psp-safe-put layout 'CanonicalMediaName found))))))
+      (setq med (psp-get layout 'CanonicalMediaName))
+      (if (vl-catch-all-error-p med) nil med))))
+
 ;; Лента печати на системный принтер — дословно лента FP 1.03
 ;; (формат не посылается: бумага предустановлена psp-page-preset)
 (defun psp-fp-plot-tape (printer rot ctb x1 y1 x2 y2 / old-cmdecho)
@@ -3243,10 +3293,12 @@
           (princ (strcat "\n  ПСП: " (car nm-n)
                          " (" (if (nth 2 it) (nth 2 it) "?")
                          " -> " paper " на " printer ")"))
-          (setq res (vl-catch-all-apply 'psp-page-preset (list paper)))
+          (setq res (vl-catch-all-apply 'psp-fp-preset (list printer paper)))
           (if (vl-catch-all-error-p res)
             (princ (strcat "\n  ПСП: предустановка ОШИБКА: "
-                           (vl-catch-all-error-message res))))
+                           (vl-catch-all-error-message res)))
+            (princ (strcat "\n  ПСП: предустановка: "
+                           (if (= (type res) 'STR) res "НЕ ПРИМЕНИЛАСЬ"))))
           (setq x1 (car (trans (list (nth 4 it) (nth 5 it)) 0 1))
                 y1 (cadr (trans (list (nth 4 it) (nth 5 it)) 0 1))
                 x2 (car (trans (list (nth 6 it) (nth 7 it)) 0 1))
@@ -3258,7 +3310,7 @@
             (progn
               (princ "\n  ПСП: -ПЕЧАТЬ застряла — вторая попытка.")
               (psp-clear-stuck)
-              (psp-page-preset paper)
+              (psp-fp-preset printer paper)
               (psp-fp-plot-tape printer rot ctb x1 y1 x2 y2)
               (psp-page-restore)
               (if (> (getvar "CMDACTIVE") 0)
