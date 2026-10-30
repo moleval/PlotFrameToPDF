@@ -1,5 +1,5 @@
 ;;; ============================================================
-;;; PlotFrame.lsp v1.09 Ч ћќЌќЋ»“ (сборка трЄх модулей + фаза 2;
+;;; PlotFrame.lsp v1.10 Ч ћќЌќЋ»“ (сборка трЄх модулей + фаза 2;
 ;;; ранее файл называлс€ PlotFrameBundle.lsp). «агружать ¬ћ≈—“ќ
 ;;; трЄх старых файлов из archive/, Ќ≈ вместе с ними: имена
 ;;; команд те же.
@@ -7,6 +7,14 @@
 ;;;   секци€ 2: PlotFrameToPDF.lsp v3.27 (рамки -> PDF, Ё —ѕƒ‘)
 ;;;   секци€ 3: PlotFrameToFP.lsp  v1.03 (рамки -> принтер, Ё —‘ѕј4/A3)
 ;;;   секци€ 4: Ё ——ѕƒ—‘ѕ Ч форматы —ѕƒ— на системный принтер
+;;; v1.10: psp-page-preset (—ѕƒ—): при отказе устройства принима-
+;;;        ть им€ бумаги Ч автопоиск той же формат-группы в списке
+;;;        бумаг (префикс до Ђ_(ї) и подстановка существующей ориен-
+;;;        тации. ѕричина: у pc3 DWG To PDF у 2A0/A0 полноблочные
+;;;        имена только книжные -> запрошенные альбомные отвергались,
+;;;        лист оставалс€ на старой бумаге (A2/ANSI_A) и лист альбо-
+;;;        ма выходил некорректным. ќтчЄт теперь показывает ‘ј “»-
+;;;        „≈— ”ё бумагу (chk), а не запрошенную.
 ;;; v1.09: ѕ—ѕЌј—“–ќ… », Apply: убраны три guard-проверки
 ;;;        (boundp 'c:Ё —ѕƒ‘) Ч легаси трЄхфайловой эпохи; в моноли-
 ;;;        те секци€ базы загружена всегда, поэтому *pfp-* перемен-
@@ -48,8 +56,8 @@
 ;;;        (внутренн€€ переменна€ *pfb-ver* -> *pf-ver*).
 ;;; v1.01: FP-секци€ обновлена до 1.03 (баннер версии).
 ;;; ============================================================
-(setq *pf-ver* "1.09")
-(princ "\n«агружено: PlotFrame.lsp v1.09 Ч печать рамок и форматов —ѕƒ—.")
+(setq *pf-ver* "1.10")
+(princ "\n«агружено: PlotFrame.lsp v1.10 Ч печать рамок и форматов —ѕƒ—.")
 (princ "\nќсновные команды:")
 (princ "\n  +--------------------------------------------------------------+")
 (princ "\n  |  ќћјЌƒј                  | „“ќ ƒ≈Ћј≈“                        |")
@@ -722,7 +730,7 @@
 
 ;; -ѕ≈„ј“№ не вставл€ет лишний вопрос о неподдерживаемом формате.
 ;; ѕрежние значени€ -> *psp-page-saved* -> psp-page-restore.
-(defun psp-page-preset (media-name / doc layout cfg med)
+(defun psp-page-preset (media-name / doc layout cfg med n k found x)
   (setq *psp-page-saved* nil)
   (setq doc (psp-get (vlax-get-acad-object) 'ActiveDocument))
   (setq layout (psp-get doc 'ActiveLayout))
@@ -740,6 +748,38 @@
       ;; отвергнуть им€ (например, альбомный канонический на Ћисте).
       ;; Ћента свер€етс€ с фактом (см. psp-plot-tape).
       (setq med (psp-get layout 'CanonicalMediaName))
+      ;; v1.10: если им€ отвергнуто (лист осталс€ на прежней бумаге:
+      ;; у DWG/PlotSPDS pc3 у 2A0 и A0 полноблочные имена существуют
+      ;; “ќЋ№ ќ в книжной ориентации: ISO_full_bleed_2A0_(1189x1682),
+      ;; ISO_full_bleed_A0_(841x1189)) Ч ищем в списке бумаг устройс-
+      ;; тва ту же формат-группу (префикс до Ђ_(ї) и ставим еЄ.
+      (if (or (vl-catch-all-error-p med)
+              (/= (strcase (if (= (type med) 'STR) med ""))
+                  (strcase media-name)))
+        (progn
+          (setq cfg (vl-catch-all-apply
+                      '(lambda ( )
+                         (vlax-invoke layout
+                                      'GetCanonicalMediaNames))))
+          (if (and (not (vl-catch-all-error-p cfg))
+                   (= (type cfg) 'LIST)
+                   (= (type media-name) 'STR))
+            (progn
+              (setq k (vl-string-search "_(" media-name)
+                    n (if (> k 0)
+                        (substr media-name 1 (1- k))
+                        media-name)
+                    found nil)
+              (foreach x cfg
+                (if (and (null found)
+                         (= (type x) 'STR)
+                         (wcmatch (strcase x)
+                                  (strcat (strcase n) "_(*")))
+                  (setq found x)))
+              (if found
+                (progn
+                  (psp-safe-put layout 'CanonicalMediaName found)
+                  (setq med (psp-get layout 'CanonicalMediaName))))))))
       (if (vl-catch-all-error-p med) nil med))))
 
 (defun psp-page-restore ( / doc layout)
@@ -1605,7 +1645,10 @@
               (setq skip (cons (car nm-n) skip)))
             (if (findfile (strcat fname ".pdf"))
               (setq ok-list
-                    (cons (list (car nm-n) (nth 2 it) (nth 3 it) media)
+                    (cons (list (car nm-n) (nth 2 it) (nth 3 it)
+                                (if (and (= (type chk) 'STR)
+                                         (/= chk ""))
+                                  chk media))
                           ok-list)
                     merge-list (cons (strcat (car nm-n) ".pdf")
                                      merge-list))
