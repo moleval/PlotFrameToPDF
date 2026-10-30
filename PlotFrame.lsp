@@ -1,5 +1,5 @@
 ;;; ============================================================
-;;; PlotFrame.lsp v1.10 — МОНОЛИТ (сборка трёх модулей + фаза 2;
+;;; PlotFrame.lsp v1.11 — МОНОЛИТ (сборка трёх модулей + фаза 2;
 ;;; ранее файл назывался PlotFrameBundle.lsp). Загружать ВМЕСТО
 ;;; трёх старых файлов из archive/, НЕ вместе с ними: имена
 ;;; команд те же.
@@ -7,6 +7,13 @@
 ;;;   секция 2: PlotFrameToPDF.lsp v3.27 (рамки -> PDF, ЭКСПДФ)
 ;;;   секция 3: PlotFrameToFP.lsp  v1.03 (рамки -> принтер, ЭКСФПА4/A3)
 ;;;   секция 4: ЭКССПДСФП — форматы СПДС на системный принтер
+;;; v1.11: psp-page-preset: имя бумаги ставится ТОЛЬКО если оно
+;;;        есть в списке бумаг устройства (точное или та же формат-
+;;;        группа); нехватка альбомной ориентации (2A0/A0 у pc3 толь-
+;;;        ко книжные) компенсируется разворотом чертежа в ленте
+;;;        («Перевернуть?» = Да, *psp-rot-adj*). Причина: подстановка
+;;;        отвергнутых имён даёт хаотичный выбор бумаги AutoCAD'ом
+;;;        (наблюдалось A2/ANSI_A/A0 на один и тот же запрос).
 ;;; v1.10: psp-page-preset (СПДС): при отказе устройства принима-
 ;;;        ть имя бумаги — автопоиск той же формат-группы в списке
 ;;;        бумаг (префикс до «_(») и подстановка существующей ориен-
@@ -56,8 +63,8 @@
 ;;;        (внутренняя переменная *pfb-ver* -> *pf-ver*).
 ;;; v1.01: FP-секция обновлена до 1.03 (баннер версии).
 ;;; ============================================================
-(setq *pf-ver* "1.10")
-(princ "\nЗагружено: PlotFrame.lsp v1.10 — печать рамок и форматов СПДС.")
+(setq *pf-ver* "1.11")
+(princ "\nЗагружено: PlotFrame.lsp v1.11 — печать рамок и форматов СПДС.")
 (princ "\nОсновные команды:")
 (princ "\n  +--------------------------------------------------------------+")
 (princ "\n  | КОМАНДА                  | ЧТО ДЕЛАЕТ                        |")
@@ -730,8 +737,32 @@
 
 ;; -ПЕЧАТЬ не вставляет лишний вопрос о неподдерживаемом формате.
 ;; Прежние значения -> *psp-page-saved* -> psp-page-restore.
-(defun psp-page-preset (media-name / doc layout cfg med n k found x)
-  (setq *psp-page-saved* nil)
+;; Размеры бумаги из канонического имени: "…_(1682.00_x_1189.00_MM)"
+;; -> (1682.0 1189.0); без распознанных размеров — nil
+(defun psp-media-dims (name / k a b)
+  (if (= (type name) 'STR)
+    (progn
+      (setq k (vl-string-search "_(" name))
+      (if (and k (> k 0))
+        (progn
+          (setq a (atof (substr name (+ k 3)))
+                k (vl-string-search "_x_" name))
+          (setq b (if k (atof (substr name (+ k 4))) nil))
+          (if (> a 0) (list a b) nil))
+        nil))
+    nil))
+
+;; Предустановка бумаги активному листу. v1.11: имя ставится ТОЛЬКО
+;; если оно есть в списке бумаг устройства; при отсутствии точного
+;; имени берётся та же формат-группы (префикс до «_(») в ЛЮБОЙ ори-
+;; ентации, а несовпадение ориентации компенсируется разворотом
+;; чертежа в ленте (*psp-rot-adj* — слот «Перевернуть?» = Да). При-
+;; чина: подстановка отвергнутых имёнAutoCAD resolving'ит хаотично
+;; (то A2, то ANSI_A, то A0) — надёжны только имена из списка.
+;; Прежние устройство/бумага сохраняются в *psp-page-saved*.
+;; Возвращает фактическое имя бумаги или nil.
+(defun psp-page-preset (media-name / doc layout cfg med names lst want k n x rd rf)
+  (setq *psp-page-saved* nil *psp-rot-adj* nil)
   (setq doc (psp-get (vlax-get-acad-object) 'ActiveDocument))
   (setq layout (psp-get doc 'ActiveLayout))
   (if (or (null layout) (vl-catch-all-error-p layout))
@@ -742,45 +773,50 @@
       (setq *psp-page-saved*
             (list (if (vl-catch-all-error-p cfg) nil cfg)
                   (if (vl-catch-all-error-p med) nil med)))
-      (psp-safe-put layout 'ConfigName *psp-pc3*)
-      (psp-safe-put layout 'CanonicalMediaName media-name)
-      ;; Читаем ФАКТИЧЕСКИ принявшийся формат: лист/устройство могут
-      ;; отвергнуть имя (например, альбомный канонический на Листе).
-      ;; Лента сверяется с фактом (см. psp-plot-tape).
-      (setq med (psp-get layout 'CanonicalMediaName))
-      ;; v1.10: если имя отвергнуто (лист остался на прежней бумаге:
-      ;; у DWG/PlotSPDS pc3 у 2A0 и A0 полноблочные имена существуют
-      ;; ТОЛЬКО в книжной ориентации: ISO_full_bleed_2A0_(1189x1682),
-      ;; ISO_full_bleed_A0_(841x1189)) — ищем в списке бумаг устройс-
-      ;; тва ту же формат-группу (префикс до «_(») и ставим её.
-      (if (or (vl-catch-all-error-p med)
-              (/= (strcase (if (= (type med) 'STR) med ""))
-                  (strcase media-name)))
+      ;; фактический список бумаг устройства
+      (setq names (vl-catch-all-apply
+                    '(lambda ( )
+                       (vlax-invoke layout
+                                    'GetCanonicalMediaNames))))
+      (setq lst (if (and (not (vl-catch-all-error-p names))
+                         (= (type names) 'LIST))
+                  names nil))
+      (setq want nil)
+      (if lst
         (progn
-          (setq cfg (vl-catch-all-apply
-                      '(lambda ( )
-                         (vlax-invoke layout
-                                      'GetCanonicalMediaNames))))
-          (if (and (not (vl-catch-all-error-p cfg))
-                   (= (type cfg) 'LIST)
-                   (= (type media-name) 'STR))
+          ;; точное имя, если есть в списке
+          (foreach x lst
+            (if (and (null want) (= (type x) 'STR)
+                     (= (strcase x) (strcase media-name)))
+              (setq want x)))
+          ;; иначе та же формат-группа в любой ориентации
+          (if (null want)
             (progn
               (setq k (vl-string-search "_(" media-name)
-                    n (if (> k 0)
-                        (substr media-name 1 (1- k))
-                        media-name)
-                    found nil)
-              (foreach x cfg
-                (if (and (null found)
-                         (= (type x) 'STR)
+                    n (if (> k 0) (substr media-name 1 (1- k)) media-name))
+              (foreach x lst
+                (if (and (null want) (= (type x) 'STR)
                          (wcmatch (strcase x)
                                   (strcat (strcase n) "_(*")))
-                  (setq found x)))
-              (if found
-                (progn
-                  (psp-safe-put layout 'CanonicalMediaName found)
-                  (setq med (psp-get layout 'CanonicalMediaName))))))))
+                  (setq want x))))))
+        ;; списка нет — шлём запрошенное, как прежде
+        (setq want media-name))
+      ;; ориентация бумаги не совпала с ориентацией чертежа -> разворот
+      (if (and want (/= (strcase want) (strcase media-name)))
+        (progn
+          (setq rd (psp-media-dims media-name)
+                rf (psp-media-dims want))
+          (if (and rd rf (> (car rd) 0) (> (car rf) 0) (cadr rd) (cadr rf))
+            (if (/= (>= (car rd) (cadr rd))
+                    (>= (car rf) (cadr rf)))
+              (setq *psp-rot-adj* T)))))
+      ;; ставим ТОЛЬКО подтверждённое списком имя
+      (psp-safe-put layout 'ConfigName *psp-pc3*)
+      (if want
+        (psp-safe-put layout 'CanonicalMediaName want))
+      (setq med (psp-get layout 'CanonicalMediaName))
       (if (vl-catch-all-error-p med) nil med))))
+
 
 (defun psp-page-restore ( / doc layout)
   (if *psp-page-saved*
@@ -806,7 +842,7 @@
 ;; вопросов «лист последним»/«удалять скрытые», но есть «Задать
 ;; тонирование» (ответ — ключевое слово). Лента собирается по TILEMODE.
 (defun psp-plot-tape (fname media-name rot-str ctb x1 y1 x2 y2
-                      media-chk alt / tape old-cmdecho)
+                      media-chk alt flip / tape old-cmdecho)
   (setq old-cmdecho (getvar "CMDECHO"))
   (setvar "CMDECHO" (if *psp-plot-echo* 1 0))
   (setq tape
@@ -824,7 +860,8 @@
               (t media-name))
             "_M"                     ; мм
             rot-str                  ; ориентация _L / _P
-            "_N"                     ; не переворачивать
+            (if flip "_Y" "_N")      ; перевернуть, если бумага той
+                                     ; же группы, но другой ориентации
             "_W"                     ; область: Рамка
             (list x1 y1)             ; нижний левый угол
             (list x2 y2)             ; верхний правый угол
@@ -1590,6 +1627,7 @@
           (princ (strcat "\n  ПСП: " (car nm-n) " (" media ")"))
           ;; Предустановка формата листа (без лишних вопросов)
           (setq *psp-stage* "предустановка листа")
+          (setq *psp-rot-adj* nil)
           (setq res (vl-catch-all-apply 'psp-page-preset (list media)))
           (if (vl-catch-all-error-p res)
             (progn
@@ -1602,7 +1640,15 @@
                           'CanonicalMediaName)))
               (princ (strcat "\n  ПСП: предустановка: "
                              (if (and (= (type chk) 'STR) (/= chk ""))
-                               chk "НЕ ПРИМЕНИЛАСЬ")))))
+                               chk "НЕ ПРИМЕНИЛАСЬ")
+                             (if *psp-rot-adj*
+                               " (+разворот чертежа)"
+                               "")
+                             (if (and (= (type chk) 'STR)
+                                      (/= (strcase chk)
+                                          (strcase media)))
+                               " (ВНИМАНИЕ: не запрошенная!)"
+                               "")))))
           ;; Окно печати задаётся в UCS
           (setq x1 (car (trans (list (nth 4 it) (nth 5 it)) 0 1))
                 y1 (cadr (trans (list (nth 4 it) (nth 5 it)) 0 1))
@@ -1611,7 +1657,7 @@
           (setq *psp-stage* "печать листа")
           (setq res (vl-catch-all-apply 'psp-plot-tape
                       (list (strcat fname ".pdf") media rot-str ctb
-                            x1 y1 x2 y2 chk nil)))
+                            x1 y1 x2 y2 chk nil *psp-rot-adj*)))
           (psp-page-restore)
           ;; Если -ПЕЧАТЬ застряла на незапланированном вопросе, в стеке
           ;; остаётся CMDACTIVE; его остатки сдвинули бы следующую ленту.
@@ -1634,7 +1680,7 @@
               (vl-catch-all-apply 'psp-page-preset (list media))
               (setq res (vl-catch-all-apply 'psp-plot-tape
                           (list (strcat fname ".pdf") media rot-str ctb
-                                x1 y1 x2 y2 chk T)))
+                                x1 y1 x2 y2 chk T *psp-rot-adj*)))
               (psp-page-restore)
               (if (> (getvar "CMDACTIVE") 0) (psp-clear-stuck))))
           (if (and (vl-catch-all-error-p res)
